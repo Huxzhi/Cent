@@ -15,7 +15,7 @@ export const filterOrderedBillListByTimeRange = <T extends { time: number }>(
         const bill = orderedList[desc ? index : orderedList.length - index];
         const billTime = dayjs.unix(bill.time / 1000);
         if (billTime.isAfter(newest)) {
-        } else if (billTime.isSameOrAfter(oldest)) {
+        } else if (billTime.isAfter(oldest)) {
             result.push(bill);
         } else if (billTime.isBefore(oldest)) {
             break;

@@ -11,6 +11,7 @@ import {
 } from "@/components/bill-filter";
 import { showBillInfo } from "@/components/bill-info";
 import BillItem from "@/components/ledger/item";
+import { showSortableList } from "@/components/sortable";
 import { AnalysisCloud } from "@/components/stat/analysic-cloud";
 import { AnalysisDetail } from "@/components/stat/analysis-detail";
 import { useChartPart } from "@/components/stat/chart-part";
@@ -22,9 +23,10 @@ import {
 } from "@/components/stat/focus-type";
 import { TagItem } from "@/components/stat/tag-item";
 import { Button } from "@/components/ui/button";
+import { useCurrency } from "@/hooks/use-currency";
 import { useCustomFilters } from "@/hooks/use-custom-filters";
 import { useTag } from "@/hooks/use-tag";
-import type { BillFilter } from "@/ledger/extra-type";
+import type { BillFilter, BillFilterView } from "@/ledger/extra-type";
 import type { Bill } from "@/ledger/type";
 import { useIntl } from "@/locale";
 import { useBookStore } from "@/store/book";
@@ -50,9 +52,9 @@ export default function Page() {
         return [
             {
                 id: "default-filter",
-                filter: {} as BillFilter,
+                filter: {},
                 name: t("default-filter-name"),
-            },
+            } as BillFilterView,
             ...(customFilters ?? []),
         ];
     }, [t, customFilters]);
@@ -65,13 +67,15 @@ export default function Page() {
         (v) => v.id === filterViewId,
     );
     const selectedFilter = selectedFilterView?.filter;
+
     const fullRange = [
         selectedFilter?.start ?? startTime,
         selectedFilter?.end ?? endTime,
     ] as [number, number];
+
     const {
         sliceRange,
-        viewType: selectedViewId,
+        viewType,
         props: dateSlicedProps,
         setSliceId,
     } = useDateSliced({
@@ -79,8 +83,8 @@ export default function Page() {
         selectCustomSliceWhenInitial: Boolean(id),
     });
     const realRange = [
-        sliceRange?.[0] ?? startTime,
-        sliceRange?.[1] ?? endTime,
+        sliceRange?.[0] ?? selectedFilter?.start ?? startTime,
+        sliceRange?.[1] ?? selectedFilter?.end ?? endTime,
     ];
 
     const navigate = useNavigate();
@@ -120,11 +124,12 @@ export default function Page() {
     const [dimension, setDimension] = useState<"category" | "user">("category");
 
     const { dataSources, Part, setSelectedCategoryName } = useChartPart({
-        selectedViewId,
+        viewType,
         seeDetails,
         focusType,
         filtered,
         dimension,
+        displayCurrency: selectedFilterView?.displayCurrency,
     });
 
     const totalMoneys = FocusTypes.map((t) => dataSources.total[t]);
@@ -165,11 +170,11 @@ export default function Page() {
         }, [filtered]);
     const [analysis, setAnalysis] = useState<AnalysisResult>();
     const analysisUnit =
-        selectedViewId === "yearly"
+        viewType === "yearly"
             ? "year"
-            : selectedViewId === "monthly"
+            : viewType === "monthly"
               ? "month"
-              : selectedViewId === "weekly"
+              : viewType === "weekly"
                 ? "week"
                 : "day";
     useEffect(() => {
@@ -192,55 +197,107 @@ export default function Page() {
         });
     }, [analysisUnit, focusType, realRange[0], realRange[1]]);
 
-    const { updateFilter } = useCustomFilters();
+    const { updateFilter, addFilter } = useCustomFilters();
     const toChangeFilter =
         filterViewId === "default-filter"
             ? undefined
             : async () => {
-                  console.log(selectedFilterView, "sss");
                   if (!selectedFilterView) {
                       return;
                   }
                   const id = selectedFilterView.id;
-                  console.log(selectedFilterView, "ssssdsd");
-                  const action = await showBillFilterView({
-                      filter: selectedFilterView.filter,
-                      name: selectedFilterView.name,
-                  });
+                  const action = await showBillFilterView(selectedFilterView);
                   if (action === "delete") {
                       await updateFilter(id);
                       setFilterViewId(allFilterViews[0].id);
                       return;
                   }
                   await updateFilter(id, {
-                      filter: action.filter,
-                      name: action.name,
+                      ...action,
+                      name: action.name ?? selectedFilterView.name,
                   });
               };
+    const toReOrder = async () => {
+        if ((customFilters?.length ?? 0) === 0) {
+            return;
+        }
+        const ordered = await showSortableList(customFilters);
+        useLedgerStore.getState().updateGlobalMeta((prev) => {
+            prev.customFilters = ordered
+                .map((v) => prev.customFilters?.find((c) => c.id === v.id))
+                .filter((v) => v !== undefined);
+            return prev;
+        });
+    };
+    const toAddFilter = async () => {
+        const newFilter = await showBillFilterView({
+            name: t("new-filter-name"),
+            filter: {},
+            hideDelete: true,
+        });
+        if (newFilter === "delete" || !newFilter.name) {
+            return;
+        }
+        const id = await addFilter(newFilter.name, newFilter);
+        if (!id) {
+            return;
+        }
+        setSliceId(undefined);
+        setFilterViewId(id);
+    };
+
+    const { allCurrencies, baseCurrency } = useCurrency();
     return (
         <div className="w-full h-full p-2 flex flex-col items-center justify-center gap-4 overflow-hidden page-show">
             <div className="w-full mx-2 max-w-[600px] flex flex-col gap-2">
                 <div className="w-full flex flex-col gap-2">
                     <div className="w-full flex">
                         <div className="flex-1 flex gap-2 overflow-x-auto scrollbar-hidden">
-                            {allFilterViews.map((filter) => (
-                                <Button
-                                    key={filter.id}
-                                    size={"sm"}
-                                    className={cn(
-                                        filterViewId !== filter.id
-                                            ? "text-primary/50"
-                                            : "relative after:absolute after:bottom-0 after:left-0 after:w-full after:h-[2px] after:rounded-full after:bg-primary/20",
-                                    )}
-                                    variant="ghost"
-                                    onClick={() => {
-                                        setSliceId(undefined);
-                                        setFilterViewId(filter.id);
-                                    }}
-                                >
-                                    {filter.name}
-                                </Button>
-                            ))}
+                            {allFilterViews.map((filter) => {
+                                const displayCurrency =
+                                    filter.displayCurrency === baseCurrency.id
+                                        ? undefined
+                                        : allCurrencies.find(
+                                              (v) =>
+                                                  v.id ===
+                                                  filter.displayCurrency,
+                                          );
+                                return (
+                                    <Button
+                                        key={filter.id}
+                                        size={"sm"}
+                                        className={cn(
+                                            filterViewId !== filter.id
+                                                ? "text-primary/50"
+                                                : "relative after:absolute after:bottom-[2px] after:left-3 after:w-[calc(100%-24px)] after:h-[2px] after:rounded-full after:bg-primary/20",
+                                        )}
+                                        variant="ghost"
+                                        onClick={() => {
+                                            setSliceId(undefined);
+                                            setFilterViewId(filter.id);
+                                        }}
+                                    >
+                                        {displayCurrency?.symbol}
+                                        {filter.name}
+                                    </Button>
+                                );
+                            })}
+                        </div>
+                        <div className="">
+                            <Button
+                                variant="ghost"
+                                onClick={toAddFilter}
+                                size="sm"
+                            >
+                                <i className="icon-[mdi--plus] size-4"></i>
+                            </Button>
+                            <Button
+                                variant="ghost"
+                                onClick={toReOrder}
+                                size="sm"
+                            >
+                                <i className="icon-[mdi--menu] size-4"></i>
+                            </Button>
                         </div>
                     </div>
                 </div>

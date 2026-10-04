@@ -21,6 +21,7 @@ import { useCurrency } from "@/hooks/use-currency";
 import { useCustomFilters } from "@/hooks/use-custom-filters";
 import type { Bill, BillFilter } from "@/ledger/type";
 import { useIntl } from "@/locale";
+import { measure } from "@/measurement";
 import { useBookStore } from "@/store/book";
 import { useLedgerStore } from "@/store/ledger";
 import { usePreferenceStore } from "@/store/preference";
@@ -56,6 +57,22 @@ const SORTS = [
         label: "lowest-amount",
     },
 ] as const;
+
+function getSearchMode(
+    form: BillFilter,
+): "empty" | "keyword" | "filter" | "mixed" {
+    const hasKeyword = Boolean(form.comment?.trim());
+    const hasFilter = Object.entries(form).some(([key, value]) => {
+        if (key === "comment" || value === undefined || value === null) {
+            return false;
+        }
+        return !Array.isArray(value) || value.length > 0;
+    });
+    if (hasKeyword && hasFilter) return "mixed";
+    if (hasKeyword) return "keyword";
+    if (hasFilter) return "filter";
+    return "empty";
+}
 
 export default function Page() {
     const t = useIntl();
@@ -102,6 +119,7 @@ export default function Page() {
         setSelectedIds([]);
         const result = await StorageDeferredAPI.filter(book, form);
         setList(result);
+        measure("search_submitted", { mode: getSearchMode(form) });
     }, [form]);
 
     const navigate = useNavigate();
@@ -221,6 +239,12 @@ export default function Page() {
         await useLedgerStore.getState().updateBills(updatedEntries);
         await toSearch();
     };
+    const triggerSearch = () => {
+        toSearch();
+        setTimeout(() => {
+            setSearched(true);
+        }, 1000);
+    };
     return (
         <div className="w-full h-full p-2 flex justify-center overflow-hidden page-show">
             <div className="h-full w-full px-2 max-w-[600px] flex flex-col">
@@ -247,18 +271,18 @@ export default function Page() {
                                             comment: e.target.value,
                                         }));
                                     }}
+                                    onKeyDown={(e) => {
+                                        if (e.key === "Enter") {
+                                            triggerSearch();
+                                        }
+                                    }}
                                 />
                             </Clearable>
                         </div>
                         <Button
                             variant="ghost"
                             className="p-3 rounded-md"
-                            onClick={() => {
-                                toSearch();
-                                setTimeout(() => {
-                                    setSearched(true);
-                                }, 1000);
-                            }}
+                            onClick={triggerSearch}
                         >
                             <i className="icon-[mdi--search]"></i>
                         </Button>

@@ -1,5 +1,7 @@
+import { AppDownloadIcons } from "@/components/app-download";
 import PopupLayout from "@/layouts/popup-layout";
 import { useIntl } from "@/locale";
+import { isMeasurementEnabled } from "@/measurement";
 
 import createConfirmProvider from "../confirm";
 import { SponsorAboutItem } from "../sponsor";
@@ -63,6 +65,33 @@ function Form({ onCancel }: { onCancel?: () => void }) {
                     <i className="icon-[mdi--arrow-top-right]"></i>
                 </a>
                 <SponsorAboutItem />
+                <div className="w-full flex flex-col items-center gap-3 px-4 pb-4">
+                    <div className="text-sm text-foreground/80">
+                        {t("download-app")}
+                    </div>
+                    <AppDownloadIcons variant="about" iconClassName="size-5" />
+                </div>
+                {isMeasurementEnabled() && (
+                    <div className="flex items-center justify-center gap-3 px-4 pt-2 text-xs text-foreground/50">
+                        <a
+                            className="underline hover:text-foreground/80"
+                            href="https://linkai.work/cent/terms"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                        >
+                            {t("terms-of-use")}
+                        </a>
+                        <span aria-hidden="true">·</span>
+                        <a
+                            className="underline hover:text-foreground/80"
+                            href="https://linkai.work/cent/privacy"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                        >
+                            {t("privacy-policy")}
+                        </a>
+                    </div>
+                )}
                 {/* <div className="w-full min-h-10 pb-2 flex justify-between items-center px-4 opacity-60">
                     <div className="flex items-center gap-2">
                         <i className="icon-[mdi--github] size-5"></i>

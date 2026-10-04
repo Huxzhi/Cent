@@ -1,9 +1,11 @@
 /// <reference types="vite/client" />
+/// <reference types="vite-plugin-pwa/client" />
 /// <reference types="unplugin-info/client" />
 /// <reference types="vite-plugin-svgr/client" />
 
 interface Window {
     __CENT_ZEN_FALLBACK__?: boolean;
+    __CENT_MEASUREMENT__?: import("./measurement").CentMeasurementCollector;
 }
 
 // node-forge 子模块类型声明（用于按需导入）

@@ -1,13 +1,9 @@
 import type { WebDAVEdit } from "@/components/modal/web-dav";
 import { Scheduler } from "@/database/scheduler";
 import { BillIndexedDBStorage } from "@/database/storage";
-import type { Bill, GlobalMeta } from "@/ledger/type";
+import type { Bill } from "@/ledger/type";
 import { createTidal } from "@/tidal";
-import {
-    checkWebDAVConfig,
-    createWebDAVSyncer,
-    fetchWebDAVUserIds,
-} from "@/tidal/web-dav";
+import { checkWebDAVConfig, createWebDAVSyncer } from "@/tidal/web-dav";
 import type { ZenPost } from "@/zen/types";
 import type { SyncEndpointFactory } from "../type";
 
@@ -33,12 +29,6 @@ type WebDAVPrivateMeta = {
     _webDAVUserAliases?: string[];
 };
 
-type WebDAVMeta = WebDAVPrivateMeta & GlobalMeta;
-
-const restoreUserIdType = (userId: string) => {
-    return /^\d+$/.test(userId) ? Number(userId) : userId;
-};
-
 export const WebDAVEndpoint: SyncEndpointFactory = {
     type: "webdav",
     name: "webdav",
@@ -57,24 +47,6 @@ export const WebDAVEndpoint: SyncEndpointFactory = {
                     );
                     return Promise.reject(error);
                 });
-
-                const userIds = await fetchWebDAVUserIds({
-                    remoteUrl: remote,
-                    username: data.username,
-                    password: data.password,
-                    proxy: data.proxy,
-                });
-                if (userIds.length === 0) {
-                    data.userId = crypto.randomUUID();
-                } else if (userIds.length === 1) {
-                    data.userId = restoreUserIdType(userIds[0]);
-                } else {
-                    const selection = await modal.webDavUser({ userIds });
-                    data.userId =
-                        selection.type === "new"
-                            ? crypto.randomUUID()
-                            : restoreUserIdType(selection.userId);
-                }
             },
         });
         if (!auth) {
@@ -97,8 +69,6 @@ export const WebDAVEndpoint: SyncEndpointFactory = {
             password: auth.password,
             remoteUrl: remote,
             proxy: auth.proxy,
-            userId: auth.userId,
-            displayName: auth.customUserName,
         };
         const repo = createTidal<Bill>({
             storageFactory: (name) => new BillIndexedDBStorage(`book-${name}`),
@@ -148,12 +118,19 @@ export const WebDAVEndpoint: SyncEndpointFactory = {
                 await repo.detach();
                 await zenRepo.detach();
             },
-            getUserInfo: repo.getUserInfo,
+            getUserInfo: async () => {
+                const Me = {
+                    id: auth.customUserName || auth.username,
+                    name: auth.customUserName || auth.username,
+                    avatar_url: "/icon.png",
+                };
+                return Me;
+            },
             getCollaborators: async (id) => {
                 const aliases = await getUserAliases(id);
                 const Me = {
-                    id: (auth.userId ?? auth.username) as unknown as string,
-                    name: auth.customUserName || auth.username,
+                    id: auth.username,
+                    name: auth.username,
                     avatar_url: "/icon.png",
                 };
                 const users = [
@@ -176,35 +153,17 @@ export const WebDAVEndpoint: SyncEndpointFactory = {
             createBook: repo.create,
             initBook: async (name) => {
                 await Promise.all([repo.init(name), zenRepo.init(name)]);
-                repo.getMeta(name).then((meta?: WebDAVMeta) => {
+                repo.getMeta(name).then((meta?: WebDAVPrivateMeta) => {
                     const customUserName = auth.customUserName;
-                    const userId = auth.userId;
-                    const newMeta = meta ?? ({} as WebDAVMeta);
-                    let needsUpdate = false;
-
-                    if (
-                        userId !== undefined &&
-                        !newMeta.personal?.[userId]
-                    ) {
-                        newMeta.personal = {
-                            ...newMeta.personal,
-                            [userId]: {},
-                        };
-                        needsUpdate = true;
+                    if (!customUserName) {
+                        return;
                     }
-
-                    if (
-                        customUserName &&
-                        !newMeta._webDAVUserAliases?.includes(customUserName)
-                    ) {
+                    if (!meta?._webDAVUserAliases?.includes(customUserName)) {
+                        const newMeta = meta ?? {};
                         newMeta._webDAVUserAliases = [
-                            ...(newMeta._webDAVUserAliases ?? []),
+                            ...(meta?._webDAVUserAliases ?? []),
                             customUserName,
                         ];
-                        needsUpdate = true;
-                    }
-
-                    if (needsUpdate) {
                         repo.batch(name, [
                             {
                                 type: "meta",

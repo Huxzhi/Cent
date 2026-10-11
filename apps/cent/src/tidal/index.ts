@@ -20,6 +20,7 @@ export type StoreStructure<F = FileLike> = {
     chunks: (F & { startIndex: number })[];
     meta: F;
     assets: F[];
+    revision?: string;
 };
 
 export type StoreDetail = {
@@ -45,6 +46,7 @@ export type Syncer = {
             content: string | undefined;
         }[],
         signal?: AbortSignal,
+        expectedRevision?: string,
     ) => Promise<StoreStructure>;
     transformAsset: (file: File, storeFullName: string) => AssetKey;
     createStore: (name: string) => Promise<{ id: string; name: string }>;

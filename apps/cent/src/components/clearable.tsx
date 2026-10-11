@@ -6,6 +6,7 @@ interface ClearableProps {
     onClear?: () => void;
     children: ReactNode;
     className?: string;
+    clearLabel?: string;
 }
 
 const Clearable: FC<ClearableProps> = ({
@@ -13,6 +14,7 @@ const Clearable: FC<ClearableProps> = ({
     onClear,
     children,
     className,
+    clearLabel,
 }) => {
     return (
         <div className={cn("flex items-center", className)}>
@@ -20,6 +22,7 @@ const Clearable: FC<ClearableProps> = ({
             {visible && (
                 <button
                     type="button"
+                    aria-label={clearLabel}
                     className={cn(
                         "flex items-center rounded-full justify-center hover:bg-accent hover:text-accent-foreground",
                     )}

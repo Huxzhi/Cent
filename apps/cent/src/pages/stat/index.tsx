@@ -1,574 +1,524 @@
-import dayjs from "dayjs";
-import { Switch } from "radix-ui";
+import { useMemo, useState } from "react";
+import { useStore } from "zustand";
+import { useAccountingLabels } from "../../components/accounting/i18n";
+import { FormError, money } from "../../components/accounting/shared";
 import {
-    Fragment,
-    useCallback,
-    useEffect,
-    useMemo,
-    useRef,
-    useState,
-} from "react";
-import { useNavigate, useParams } from "react-router";
-import { useShallow } from "zustand/shallow";
-import { StorageDeferredAPI } from "@/api/storage";
-import type { AnalysisResult } from "@/api/storage/analysis";
-import AssistantButton from "@/components/assistant";
-import { setEnv } from "@/components/assistant/tools/env";
+    type AccountingFilterEdit,
+    AccountingFilterProvider,
+    showAccountingFilter,
+} from "../../components/bill-filter/accounting";
+import { isCancelError } from "../../components/confirm/state";
 import {
-    BillFilterViewProvider,
-    showBillFilterView,
-} from "@/components/bill-filter";
-import { showBillInfo } from "@/components/bill-info";
-import BillItem from "@/components/ledger/item";
-import { showSortableList } from "@/components/sortable";
-import { AnalysisCloud } from "@/components/stat/analysic-cloud";
-import { AnalysisDetail } from "@/components/stat/analysis-detail";
-import AnalysisMap from "@/components/stat/analysis-map";
-import { useChartPart } from "@/components/stat/chart-part";
-import { DateSliced, useDateSliced } from "@/components/stat/date-slice";
+    AccountingStructure,
+    AccountingTrend,
+    statisticsDate,
+} from "../../components/stat/accounting-charts";
+import AccountingStatisticsDetails from "../../components/stat/accounting-details";
+import type { ViewType } from "../../components/stat/date-slice";
+import { DateSliced, useDateSliced } from "../../components/stat/date-slice";
+import SavedStatisticsViews from "../../components/stat/saved-views";
+import { Button } from "../../components/ui/button";
+import { useAccountingView } from "../../hooks/use-accounting-view";
+import { amountToNumber } from "../../ledger/accounting";
 import {
-    type FocusType,
-    FocusTypeSelector,
-    FocusTypes,
-} from "@/components/stat/focus-type";
-import { TagItem } from "@/components/stat/static-item";
-import { Button } from "@/components/ui/button";
-import WidgetPreview from "@/components/widget/preview";
-import { useCurrency } from "@/hooks/use-currency";
+    analysisAccountTypes,
+    getAnalysisLines,
+    getAnalysisTotals,
+    getAnalysisTrend,
+} from "../../ledger/accounting/analysis";
+import type { AccountingData } from "../../ledger/accounting/backup";
 import {
-    DefaultFilterViewId,
-    useCustomFilters,
-} from "@/hooks/use-custom-filters";
-import { useTag } from "@/hooks/use-tag";
-import { useWidget } from "@/hooks/use-widget";
+    getStatisticsAccountIds,
+    getStatisticsAccountRows,
+    getStatisticsBuckets,
+    getStatisticsTotals,
+    getStatisticsTrend,
+    type StatisticsAccountRow,
+    type StatisticsBucket,
+    type StatisticsFilter,
+    type StatisticsLine,
+} from "../../ledger/accounting/statistics";
 import type {
-    BillFilter,
-    BillFilterView,
-    BillFilterViewModule,
-} from "@/ledger/extra-type";
-import type { Bill } from "@/ledger/type";
-import { useIntl } from "@/locale";
-import { useBookStore } from "@/store/book";
-import { useLedgerStore } from "@/store/ledger";
-import { cn } from "@/utils";
+    SavedStatisticsView,
+    StatisticsViewSnapshot,
+} from "../../ledger/accounting/statistics-view";
+import type { AccountType } from "../../ledger/accounting/types";
+import { useLocale } from "../../locale";
+import { accountingStore } from "../../store/accounting";
+import { useUserStore } from "../../store/user";
 
-const DefaultModuleOrder: BillFilterViewModule[] = [
-    "base-analysis",
-    "top-words",
-    "map",
-    "analysis",
-    "top-expense",
-    "top-income",
-];
+type Filter = Omit<StatisticsFilter, "start" | "end">;
 
 export default function Page() {
-    const t = useIntl();
-    const { id } = useParams();
+    const current = useStore(accountingStore, (state) => state.current);
+    const { locale } = useLocale();
+    return current ? (
+        <StatisticsPage
+            key={`${current.book.id}:${locale}:${current.data.timeZone}`}
+            data={current.data}
+            bookId={current.book.id}
+        />
+    ) : null;
+}
 
-    const { bills } = useLedgerStore();
-    const endTime = useMemo(() => Date.now(), []); //bills[0]?.time ?? dayjs();
-    const startTime = bills[bills.length - 1]?.time ?? dayjs();
-
-    const customFilters = useLedgerStore(
-        useShallow((state) => state.infos?.meta.customFilters),
-    );
-
-    const allFilterViews = useMemo(() => {
-        if (customFilters?.some((f) => f.id === DefaultFilterViewId)) {
-            return customFilters;
-        }
-        return [
-            {
-                id: DefaultFilterViewId,
-                filter: {},
-                name: t("default-filter-name"),
-            } as BillFilterView,
-            ...(customFilters ?? []),
-        ];
-    }, [t, customFilters]);
-
-    const [filterViewId, setFilterViewId] = useState(
-        id ?? allFilterViews[0].id,
-    );
-
-    const selectedFilterView = allFilterViews.find(
-        (v) => v.id === filterViewId,
-    );
-    const selectedFilter = selectedFilterView?.filter;
-
-    const fullRange = [
-        selectedFilter?.start ?? startTime,
-        selectedFilter?.end ?? endTime,
-    ] as [number, number];
-
-    const {
-        sliceRange,
-        viewType,
-        props: dateSlicedProps,
-        setSliceId,
-    } = useDateSliced({
-        range: fullRange,
-        selectCustomSliceWhenInitial: Boolean(id),
-    });
-    const realRange = useMemo(
+function StatisticsPage({
+    data,
+    bookId,
+}: {
+    data: AccountingData;
+    bookId: string;
+}) {
+    const { t } = useAccountingLabels();
+    const userId = useUserStore((state) => state.id);
+    const cachedUsers = useUserStore((state) => state.cachedUsers);
+    const { now } = useAccountingView(data);
+    const [selectedViewId, setSelectedViewId] = useState<string>();
+    const [filters, setFilters] = useState<Filter>({});
+    const [cashFocus, setCashFocus] = useState(1);
+    const [details, setDetails] = useState<StatisticsLine[]>();
+    const range = useMemo<[number, number]>(
         () => [
-            sliceRange?.[0] ?? selectedFilter?.start ?? startTime,
-            sliceRange?.[1] ?? selectedFilter?.end ?? endTime,
+            data.transactions.reduce(
+                (earliest, transaction) => Math.min(earliest, transaction.time),
+                now,
+            ),
+            now,
         ],
-        [
-            sliceRange,
-            selectedFilter?.start,
-            selectedFilter?.end,
-            startTime,
-            endTime,
-        ],
+        [data.transactions, now],
     );
-
-    const navigate = useNavigate();
-    const seeDetails = useCallback(
-        (append?: Partial<BillFilter>) => {
-            navigate("/search", {
-                state: {
-                    filter: {
-                        ...selectedFilter,
-                        start: realRange[0],
-                        end: realRange[1],
-                        ...append,
-                    },
-                },
-            });
-        },
-        [navigate, selectedFilter, realRange],
-    );
-
-    const [filtered, setFiltered] = useState<Bill[]>([]);
-
-    useEffect(() => {
-        const book = useBookStore.getState().currentBookId;
-        if (!book) {
-            return;
+    const { props: dateProps, sliceRange, viewType } = useDateSliced({ range });
+    const start = sliceRange?.[0] ?? range[0];
+    const end = Math.min(sliceRange?.[1] ?? now, now);
+    const monthly = viewType === "yearly" || end - start > 90 * 86400000;
+    const snapshot: StatisticsViewSnapshot = {
+        view: "entries",
+        focus: cashFocus,
+        balanceMode: "changes",
+        filter: filters,
+        period:
+            viewType === "custom"
+                ? {
+                      mode: "custom",
+                      offset: 0,
+                      ...(dateProps.custom?.[0] === undefined
+                          ? {}
+                          : { start: dateProps.custom[0] }),
+                      ...(dateProps.custom?.[1] === undefined
+                          ? {}
+                          : { end: dateProps.custom[1] }),
+                  }
+                : {
+                      mode: viewType,
+                      offset: Math.max(
+                          0,
+                          dateProps.viewSlices[viewType].findIndex(
+                              (slice) =>
+                                  dateProps.value ===
+                                  `${viewType}|${slice.label}`,
+                          ),
+                      ),
+                  },
+    };
+    const selectSavedView = (saved: SavedStatisticsView) => {
+        setSelectedViewId(saved.id);
+        setFilters(structuredClone(saved.filter));
+        setCashFocus(saved.focus);
+        setDetails(undefined);
+        if (saved.period.mode === "custom") {
+            dateProps.onValueChange?.(undefined);
+            dateProps.onCustomValueChange?.([
+                saved.period.start,
+                saved.period.end,
+            ]);
+        } else {
+            const mode = saved.period.mode;
+            const slices = dateProps.viewSlices[mode];
+            const slice =
+                slices[Math.min(saved.period.offset, slices.length - 1)];
+            if (slice) dateProps.onValueChange?.(`${mode}|${slice.label}`);
         }
-        if (!selectedFilter) {
-            return;
-        }
-        StorageDeferredAPI.filter(book, {
-            ...selectedFilter,
-            start: realRange[0],
-            end: realRange[1],
-        }).then((result) => {
-            setFiltered(result);
-        });
-    }, [selectedFilter, realRange[0], realRange[1]]);
-
-    const [focusType, setFocusType] = useState<FocusType>("expense");
-    const [dimension, setDimension] = useState<"category" | "user">("category");
-
-    const { dataSources, Part, setSelectedCategoryId } = useChartPart({
-        viewType,
-        seeDetails,
-        focusType,
-        filtered,
-        dimension,
-        displayCurrency: selectedFilterView?.displayCurrency,
-    });
-
-    const totalMoneys = FocusTypes.map((t) => dataSources.total[t]);
-
-    const { widgets } = useWidget();
-
-    const effectiveModules = useMemo(() => {
-        return selectedFilterView?.modules ?? DefaultModuleOrder;
-    }, [selectedFilterView?.modules]);
-
-    const { tags } = useTag();
-    const tagStructure = useMemo(
-        () =>
-            Array.from(dataSources.tagStructure.entries())
-                .map(([tagId, struct]) => {
-                    const tag = tags.find((t) => t.id === tagId);
-                    if (!tag) {
-                        return undefined;
-                    }
-                    return {
-                        ...tag,
-                        ...struct,
-                    };
-                })
-                .filter((v) => v !== undefined),
-        [dataSources.tagStructure, tags],
-    );
-
-    const { incomes: filteredIncomeBills, expenses: filteredExpenseBills } =
-        useMemo(() => {
-            const incomes: Bill[] = [];
-            const expenses: Bill[] = [];
-            filtered.forEach((v) => {
-                if (v.type === "expense") {
-                    expenses.push(v);
-                } else {
-                    incomes.push(v);
-                }
-            });
+    };
+    const { lines, buckets, error } = useMemo(() => {
+        try {
+            if (start > end) throw new Error("Invalid statistics range");
             return {
-                incomes,
-                expenses,
+                lines: getAnalysisLines(data, { ...filters, start, end }, now),
+                buckets: getStatisticsBuckets(
+                    start,
+                    end,
+                    monthly,
+                    data.timeZone,
+                ),
             };
-        }, [filtered]);
-    const [analysis, setAnalysis] = useState<AnalysisResult>();
-    const analysisUnit =
-        viewType === "yearly"
-            ? "year"
-            : viewType === "monthly"
-              ? "month"
-              : viewType === "weekly"
-                ? "week"
-                : "day";
-    useEffect(() => {
-        const book = useBookStore.getState().currentBookId;
-        if (!book || !realRange[0] || !realRange[1]) {
-            setAnalysis(undefined);
-            return;
+        } catch (cause) {
+            return {
+                lines: [],
+                buckets: [],
+                error: t(
+                    cause instanceof Error &&
+                        cause.message === "Invalid statistics range"
+                        ? "stat-invalid-range"
+                        : "accounting-detail-amount-overflow",
+                ),
+            };
         }
-        if (!analysisUnit) {
-            setAnalysis(undefined);
-            return;
-        }
-        StorageDeferredAPI.analysis(
-            book,
-            [realRange[0], realRange[1]],
-            analysisUnit,
-            focusType,
-        ).then((v) => {
-            setAnalysis(v);
-        });
-    }, [analysisUnit, focusType, realRange[0], realRange[1]]);
-
-    const { updateFilter, addFilter } = useCustomFilters();
-    const toChangeFilter = async () => {
-        if (!selectedFilterView) {
-            return;
-        }
-        const id = selectedFilterView.id;
-        const action = await showBillFilterView({
-            ...selectedFilterView,
-            // hideDelete: id === DefaultFilterViewId,
-        });
-        if (action === "delete") {
-            await updateFilter(id);
-            setFilterViewId(allFilterViews[0].id);
-            return;
-        }
-        await updateFilter(id, {
-            ...action,
-            name: action.name ?? selectedFilterView.name,
-        });
+    }, [data, filters, start, end, now, monthly, t]);
+    const currencies = [
+        ...new Set(
+            data.transactions.flatMap((transaction) =>
+                transaction.entries.flatMap((entry) =>
+                    entry.currency ? [entry.currency.target] : [],
+                ),
+            ),
+        ),
+    ];
+    const creators = [
+        ...new Set(
+            data.transactions.map((transaction) =>
+                String(transaction.creatorId ?? ""),
+            ),
+        ),
+    ].filter(Boolean);
+    const getFilterEdit = (
+        state: StatisticsViewSnapshot,
+    ): AccountingFilterEdit => ({
+        ...state,
+        accounts: data.accounts,
+        currencies,
+        creators: creators.map((id) => ({
+            id,
+            name:
+                id === String(userId) ? t("me") : (cachedUsers[id]?.name ?? id),
+        })),
+    });
+    const changeFilters = (next: Filter) => {
+        setFilters(next);
+        if (
+            next.accountTypes?.includes("income") &&
+            !next.accountTypes.includes("expense")
+        )
+            setCashFocus(0);
+        else if (
+            next.accountTypes?.includes("expense") &&
+            !next.accountTypes.includes("income")
+        )
+            setCashFocus(1);
+        setDetails(undefined);
     };
-    const toReOrder = async () => {
-        if ((customFilters?.length ?? 0) === 0) {
-            return;
-        }
-        const ordered = await showSortableList(customFilters);
-        useLedgerStore.getState().updateGlobalMeta((prev) => {
-            prev.customFilters = ordered
-                .map((v) => prev.customFilters?.find((c) => c.id === v.id))
-                .filter((v) => v !== undefined);
-            return prev;
+    const openFilters = async () => {
+        const result = await showAccountingFilter(
+            getFilterEdit(snapshot),
+        ).catch((cause: unknown) => {
+            if (isCancelError(cause)) return undefined;
+            throw cause;
         });
+        if (result) changeFilters(result.filter);
     };
-    const toAddFilter = async () => {
-        const newFilter = await showBillFilterView({
-            name: t("new-filter-name"),
-            filter: {},
-            hideDelete: true,
-        });
-        if (newFilter === "delete" || !newFilter.name) {
-            return;
-        }
-        const id = await addFilter(newFilter.name, newFilter);
-        if (!id) {
-            return;
-        }
-        setSliceId(undefined);
-        setFilterViewId(id);
+    const reset = () => {
+        setSelectedViewId(undefined);
+        changeFilters({});
     };
-
-    const { allCurrencies, baseCurrency } = useCurrency();
-
-    const envArg = useMemo(
-        () => ({
-            filterView: selectedFilterView,
-            focusType,
-            viewType,
-            range: realRange,
-        }),
-        [selectedFilterView, focusType, viewType, realRange],
+    const shownTypes = analysisAccountTypes.filter(
+        (type) =>
+            (filters.accountTypes ?? analysisAccountTypes).includes(type) &&
+            lines.some((line) => line.type === type),
     );
-
-    setEnv(envArg);
-
-    const getBillsByFocusType = useCallback(
-        (type: FocusType) => {
-            if (type === "expense") return filteredExpenseBills;
-            if (type === "income") return filteredIncomeBills;
-            return filtered;
-        },
-        [filtered, filteredExpenseBills, filteredIncomeBills],
-    );
-
-    const renderModule = useCallback(
-        (module: BillFilterViewModule) => {
-            if (module === "base-analysis") {
-                return (
-                    <Fragment key={module}>
-                        {Part}
-                        {tagStructure.length > 0 && (
-                            <div className="rounded-md border p-2 w-full flex flex-col">
-                                <h2 className="font-medium text-lg my-3 text-center">
-                                    {t("tag-details")}
-                                </h2>
-                                <div className="table w-full border-collapse">
-                                    <div className="table-row-group divide-y">
-                                        {tagStructure.map((struct) => {
-                                            const index =
-                                                FocusTypes.indexOf(focusType);
-                                            const money = [
-                                                struct.income,
-                                                struct.expense,
-                                                struct.income - struct.expense,
-                                            ][index];
-                                            const total = totalMoneys[index];
-                                            return (
-                                                <TagItem
-                                                    key={struct.id}
-                                                    name={struct.name}
-                                                    money={money}
-                                                    total={total}
-                                                    type={focusType}
-                                                    onClick={() => {
-                                                        seeDetails({
-                                                            tags: [struct.id],
-                                                        });
-                                                    }}
-                                                ></TagItem>
-                                            );
-                                        })}
-                                    </div>
-                                </div>
-                            </div>
-                        )}
-                    </Fragment>
-                );
-            }
-            if (module === "top-words") {
-                return (
-                    <AnalysisCloud
-                        key={module}
-                        bills={getBillsByFocusType(focusType)}
-                    />
-                );
-            }
-            if (module === "map") {
-                return (
-                    <AnalysisMap
-                        key={module}
-                        bills={getBillsByFocusType(focusType)}
-                    />
-                );
-            }
-            if (module === "analysis") {
-                if (!analysis) return null;
-                return (
-                    <div
-                        key={module}
-                        className="rounded-md border p-2 w-full flex flex-col"
-                    >
-                        <h2 className="font-medium text-lg my-3 text-center">
-                            {t("analysis")}
-                        </h2>
-                        <AnalysisDetail
-                            analysis={analysis}
-                            type={focusType}
-                            unit={analysisUnit}
-                        />
-                    </div>
-                );
-            }
-            if (module === "top-expense") {
-                if (!dataSources.highestExpenseBill) return null;
-                return (
-                    <div key={module} className="rounded-md border p-2 w-full">
-                        {t("highest-expense")}:
-                        <BillItem
-                            className="w-full"
-                            bill={dataSources.highestExpenseBill}
-                            showTime
-                            onClick={() =>
-                                showBillInfo(dataSources.highestExpenseBill!)
-                            }
-                        />
-                    </div>
-                );
-            }
-            if (module === "top-income") {
-                if (!dataSources.highestIncomeBill) return null;
-                return (
-                    <div key={module} className="rounded-md border p-2 w-full">
-                        {t("highest-income")}:
-                        <BillItem
-                            className="w-full"
-                            bill={dataSources.highestIncomeBill}
-                            showTime
-                            onClick={() =>
-                                showBillInfo(dataSources.highestIncomeBill!)
-                            }
-                        />
-                    </div>
-                );
-            }
-            if (module.startsWith("widget-")) {
-                const widgetId = module.slice(7);
-                const widget = widgets.find((w) => w.id === widgetId);
-                if (!widget) return null;
-                return (
-                    <div key={module} className="rounded-md border w-full">
-                        <WidgetPreview
-                            widget={widget}
-                            bills={getBillsByFocusType(focusType)}
-                        />
-                    </div>
-                );
-            }
-            return null;
-        },
-        [
-            Part,
-            tagStructure,
-            focusType,
-            totalMoneys,
-            seeDetails,
-            getBillsByFocusType,
-            analysis,
-            analysisUnit,
-            dataSources.highestExpenseBill,
-            dataSources.highestIncomeBill,
-            t,
-            widgets,
-        ],
-    );
-
-    const sidePanelRef = useRef<HTMLDivElement>(null);
-
+    const currency = filters.amountCurrency ?? "";
+    const reportTypes: (AccountType | "cash")[] = [
+        ...(shownTypes.some((type) => type === "income" || type === "expense")
+            ? ["cash" as const]
+            : []),
+        ...shownTypes.filter((type) => type !== "income" && type !== "expense"),
+    ];
     return (
-        <div className="w-full h-full overflow-hidden flex page-show">
-            <div className="flex-1 h-full p-2 flex flex-col items-center justify-center gap-4 overflow-hidden transition-width">
-                <div className="w-full mx-2 max-w-[600px] flex flex-col gap-2">
-                    <div className="w-full flex flex-col gap-2">
-                        <div className="w-full flex">
-                            <div className="flex-1 flex gap-2 overflow-x-auto scrollbar-hidden">
-                                {allFilterViews.map((filter) => {
-                                    const displayCurrency =
-                                        filter.displayCurrency ===
-                                        baseCurrency.id
-                                            ? undefined
-                                            : allCurrencies.find(
-                                                  (v) =>
-                                                      v.id ===
-                                                      filter.displayCurrency,
-                                              );
-                                    return (
-                                        <Button
-                                            key={filter.id}
-                                            size={"sm"}
-                                            className={cn(
-                                                filterViewId !== filter.id
-                                                    ? "text-primary/50"
-                                                    : "relative after:absolute after:bottom-[2px] after:left-3 after:w-[calc(100%-24px)] after:h-[2px] after:rounded-full after:bg-primary/20",
-                                            )}
-                                            variant="ghost"
-                                            onClick={() => {
-                                                setSliceId(undefined);
-                                                setFilterViewId(filter.id);
-                                            }}
-                                        >
-                                            {displayCurrency?.symbol}
-                                            {filter.name}
-                                        </Button>
-                                    );
-                                })}
-                            </div>
-                            <div className="flex items-center">
-                                <Button
-                                    variant="ghost"
-                                    onClick={toAddFilter}
-                                    size="sm"
-                                >
-                                    <i className="icon-[mdi--plus] size-4"></i>
-                                </Button>
-                                <Button
-                                    variant="ghost"
-                                    onClick={toReOrder}
-                                    size="sm"
-                                >
-                                    <i className="icon-[mdi--menu] size-4"></i>
-                                </Button>
-                                <AssistantButton sidePanelRef={sidePanelRef} />
-                            </div>
-                        </div>
-                    </div>
-                    <DateSliced
-                        {...dateSlicedProps}
-                        onClickSettings={toChangeFilter}
+        <div className="h-full min-h-0 overflow-y-auto">
+            <div className="w-full max-w-[1000px] mx-auto flex flex-col gap-4 p-2 md:p-4">
+                <SavedStatisticsViews
+                    data={data}
+                    bookId={bookId}
+                    selectedId={selectedViewId}
+                    snapshot={snapshot}
+                    getFilterEdit={getFilterEdit}
+                    onSelect={selectSavedView}
+                    onDelete={reset}
+                >
+                    <Button
+                        size="sm"
+                        variant="ghost"
+                        aria-pressed={!selectedViewId}
+                        onClick={reset}
                     >
-                        <div className="flex items-center pr-2 relative">
-                            <Switch.Root
-                                checked={dimension === "user"}
-                                onCheckedChange={() => {
-                                    setDimension((v) => {
-                                        return v === "category"
-                                            ? "user"
-                                            : "category";
-                                    });
-                                }}
-                                className="relative z-[0] h-[29px] w-[54px] cursor-pointer rounded-sm bg-blackA6 outline-none bg-stone-300 group"
-                            >
-                                <div className="absolute top-0 left-0 w-full h-full flex items-center justify-center gap-2 z-[1]">
-                                    <i className="icon-[mdi--view-grid-outline] group-[data-[state=checked]]:text-white"></i>
-                                    <i className="icon-[mdi--account-outline]"></i>
-                                </div>
-                                <Switch.Thumb className="block size-[22px] translate-x-[4px] rounded-sm bg-background transition-transform duration-100 will-change-transform data-[state=checked]:translate-x-[28px]" />
-                            </Switch.Root>
-                        </div>
-                    </DateSliced>
-                </div>
-                <FocusTypeSelector
-                    value={focusType}
-                    onValueChange={(v) => {
-                        setFocusType(v);
-                        setSelectedCategoryId(undefined);
-                    }}
-                    money={totalMoneys}
-                />
-                <div className="w-full px-2 flex-1 flex justify-center overflow-y-auto">
-                    <div className="w-full max-w-[600px] flex flex-col items-center gap-4 relative">
-                        {effectiveModules.map((module) => renderModule(module))}
-                        <div>
-                            <Button
-                                variant="ghost"
-                                onClick={() => seeDetails()}
-                            >
-                                {t("see-all-ledgers")}
-                                <i className="icon-[mdi--arrow-up-right]"></i>
-                            </Button>
-                        </div>
-                        <div className="w-full h-20 flex-shrink-0"></div>
-                    </div>
-                </div>
-                <BillFilterViewProvider />
+                        {t("stat-unified-analysis")}
+                    </Button>
+                </SavedStatisticsViews>
+                <DateSliced {...dateProps} onClickSettings={openFilters}>
+                    <Button
+                        size="sm"
+                        variant="outline"
+                        aria-haspopup="dialog"
+                        onClick={openFilters}
+                    >
+                        {t("stat-filter-settings")}
+                    </Button>
+                </DateSliced>
+                <FormError error={error} />
+                {!error && !shownTypes.length && (
+                    <p className="text-center text-muted-foreground py-12">
+                        {t("stat-no-data")}
+                    </p>
+                )}
+                {!error &&
+                    reportTypes.map((type) => (
+                        <AnalysisPanel
+                            key={`${type}:${JSON.stringify({ filter: filters, period: snapshot.period })}`}
+                            type={type}
+                            data={data}
+                            lines={lines.filter((line) =>
+                                type === "cash"
+                                    ? line.type === "income" ||
+                                      line.type === "expense"
+                                    : line.type === type,
+                            )}
+                            buckets={buckets}
+                            currency={currency}
+                            viewType={viewType}
+                            range={[start, end]}
+                            onDetails={setDetails}
+                            focus={cashFocus}
+                            onFocusChange={setCashFocus}
+                        />
+                    ))}
+                <AccountingFilterProvider />
+                {details && (
+                    <AccountingStatisticsDetails
+                        lines={details}
+                        accounts={data.accounts}
+                        transactions={data.transactions}
+                        currency={currency}
+                        onClose={() => setDetails(undefined)}
+                    />
+                )}
             </div>
-            <div
-                ref={sidePanelRef}
-                className="side-panel hidden md:flex w-[400px] empty:w-0 transition-all border-l"
-            ></div>
         </div>
+    );
+}
+
+function AnalysisPanel({
+    type,
+    data,
+    lines,
+    buckets,
+    currency,
+    viewType,
+    range,
+    onDetails,
+    focus: requestedFocus,
+    onFocusChange,
+}: {
+    type: AccountType | "cash";
+    data: AccountingData;
+    lines: StatisticsLine[];
+    buckets: StatisticsBucket[];
+    currency: string;
+    viewType: ViewType;
+    range: [number, number];
+    onDetails: (lines: StatisticsLine[]) => void;
+    focus: number;
+    onFocusChange: (focus: number) => void;
+}) {
+    const { t, accountTypes, labelAccount } = useAccountingLabels();
+    const cash = type === "cash";
+    const focus = requestedFocus;
+    const title = cash ? t("stat-default-cash") : accountTypes[type];
+    const [path, setPath] = useState<string[]>([]);
+    const parentId = path.at(-1);
+    const ids = parentId
+        ? getStatisticsAccountIds(data.accounts, parentId)
+        : undefined;
+    const selectedLines = ids
+        ? lines.filter((line) => ids.has(line.accountId))
+        : lines;
+    const totals = cash
+        ? getStatisticsTotals(selectedLines)
+        : getAnalysisTotals(selectedLines);
+    const names = cash
+        ? [t("income"), t("expense"), t("stat-surplus")]
+        : [
+              t("stat-period-increase"),
+              t("stat-period-decrease"),
+              t("stat-period-change"),
+          ];
+    const source = cash
+        ? getStatisticsTrend(selectedLines, buckets).map((point) => [
+              statisticsDate(point.time),
+              amountToNumber(point.income),
+              amountToNumber(point.expense),
+              amountToNumber(point.net),
+          ])
+        : getAnalysisTrend(selectedLines, buckets).map((point) => [
+              statisticsDate(point.time),
+              amountToNumber(point.increase),
+              amountToNumber(point.decrease),
+              amountToNumber(point.net),
+          ]);
+    const values =
+        "income" in totals
+            ? [totals.income, totals.expense, totals.net]
+            : [totals.increase, totals.decrease, totals.net];
+    const rows = cash
+        ? focus === 2
+            ? [
+                  ...getStatisticsAccountRows(
+                      selectedLines,
+                      data.accounts,
+                      "income",
+                      parentId,
+                  ),
+                  ...getStatisticsAccountRows(
+                      selectedLines,
+                      data.accounts,
+                      "expense",
+                      parentId,
+                  ).map((row) => ({ ...row, amount: -row.amount })),
+              ]
+            : getStatisticsAccountRows(
+                  selectedLines,
+                  data.accounts,
+                  focus === 0 ? "income" : "expense",
+                  parentId,
+              )
+        : getStatisticsAccountRows(
+              selectedLines,
+              data.accounts,
+              type,
+              parentId,
+          );
+    const detailLines =
+        cash && focus !== 2
+            ? selectedLines.filter(
+                  (line) => line.type === (focus === 0 ? "income" : "expense"),
+              )
+            : selectedLines;
+    const rowDetails = (row: StatisticsAccountRow) => {
+        const selected = row.direct
+            ? new Set([row.account.id])
+            : getStatisticsAccountIds(data.accounts, row.account.id);
+        onDetails(selectedLines.filter((line) => selected.has(line.accountId)));
+    };
+    return (
+        <section
+            className="space-y-3 border rounded-lg p-3 md:p-4"
+            data-analysis-type={type}
+        >
+            <div className="flex items-center justify-between gap-2">
+                <h2 className="font-semibold">{title}</h2>
+                <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => onDetails(detailLines)}
+                >
+                    {t("stat-entry-details")}
+                </Button>
+            </div>
+            <div className="grid grid-cols-3 gap-2">
+                {values.map((amount, index) => (
+                    <Button
+                        key={names[index]}
+                        variant="outline"
+                        className={`h-auto flex flex-col border rounded p-2 text-center min-w-0 ${cash && index === focus ? "border-primary" : ""}`}
+                        aria-pressed={cash ? index === focus : undefined}
+                        data-analysis-metric={
+                            cash
+                                ? ["income", "expense", "net"][index]
+                                : undefined
+                        }
+                        onClick={() => {
+                            if (cash) {
+                                onFocusChange(index);
+                                setPath([]);
+                            } else
+                                onDetails(
+                                    index === 0
+                                        ? selectedLines.filter(
+                                              (line) => line.amount > 0,
+                                          )
+                                        : index === 1
+                                          ? selectedLines.filter(
+                                                (line) => line.amount < 0,
+                                            )
+                                          : selectedLines,
+                                );
+                        }}
+                    >
+                        <div className="text-xs text-muted-foreground">
+                            {names[index]}
+                        </div>
+                        <div className="font-medium break-all">
+                            {money(amount, currency, Boolean(currency))}
+                        </div>
+                    </Button>
+                ))}
+            </div>
+            {!!path.length && (
+                <div className="flex flex-wrap gap-1 text-xs">
+                    <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => setPath([])}
+                    >
+                        {title}
+                    </Button>
+                    {path.map((id, index) => (
+                        <Button
+                            key={id}
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => setPath(path.slice(0, index + 1))}
+                        >
+                            {labelAccount(
+                                data.accounts.find(
+                                    (account) => account.id === id,
+                                )!,
+                            )}
+                        </Button>
+                    ))}
+                </div>
+            )}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <AccountingTrend
+                    source={source}
+                    names={names}
+                    selected={cash ? focus : 2}
+                    viewType={viewType}
+                    range={range}
+                    balances={!cash}
+                    title={t(cash ? "overall-trend" : "stat-entry-trend")}
+                />
+                <AccountingStructure
+                    rows={rows}
+                    currency={currency}
+                    title={t(
+                        cash && focus !== 2
+                            ? focus === 0
+                                ? "income-structure"
+                                : "expense-structure"
+                            : "stat-entry-structure",
+                    )}
+                    chart={cash && focus !== 2 ? "pie" : "bar"}
+                    onSelect={(row) => {
+                        if (!row.expandable) {
+                            rowDetails(row);
+                            return;
+                        }
+                        if (cash)
+                            onFocusChange(
+                                row.account.type === "income" ? 0 : 1,
+                            );
+                        setPath([...path, row.account.id]);
+                    }}
+                    onDetails={rowDetails}
+                />
+            </div>
+        </section>
     );
 }

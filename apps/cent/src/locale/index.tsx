@@ -42,7 +42,7 @@ export async function initIntl(locale: LocaleName) {
 // 管理语言状态并暴露切换语言的方法
 interface LocaleContextValue {
     locale: LocaleName;
-    setLocale: (newLocale: LocaleName) => void;
+    setLocale: (newLocale: LocaleName) => Promise<void>;
 }
 
 const LocaleContext = React.createContext<LocaleContextValue | undefined>(

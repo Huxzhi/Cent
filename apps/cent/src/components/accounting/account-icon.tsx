@@ -1,6 +1,6 @@
 import { cn } from "@/utils";
 
-export default function CategoryIcon({
+export default function AccountIcon({
     icon,
     className,
 }: {

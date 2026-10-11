@@ -1,4 +1,4 @@
-import { sortBy } from "lodash-es";
+import { isEqual, isPlainObject, sortBy } from "lodash-es";
 import { v4 } from "uuid";
 import { diff, merge } from "./patch";
 
@@ -229,7 +229,7 @@ export class StashBucket<T extends BaseItem, Meta = any, Config = any> {
     }
 
     async deleteStashes(...ids: FullAction<T>["id"][]) {
-        this.stashStorage.delete(...ids);
+        await this.stashStorage.delete(...ids);
     }
 }
 
@@ -265,3 +265,195 @@ export const mergeMeta = (prev: any, diff: any) => {
     }
     return diff;
 };
+
+export class StashMergeConflictError extends Error {
+    readonly path: string;
+    constructor(path: string) {
+        super(`Sync conflict at ${path}`);
+        this.path = path;
+        this.name = "StashMergeConflictError";
+    }
+}
+
+const missing = Symbol("missing");
+// JSON 传输省略 undefined 属性；缺省字段与本地可选空字段必须使用相同语义。
+function syncValue(value: unknown): any {
+    if (Array.isArray(value)) return value.map(syncValue);
+    if (isPlainObject(value))
+        return Object.fromEntries(
+            Object.entries(value as Record<string, unknown>)
+                .filter(([, item]) => item !== undefined)
+                .map(([key, item]) => [key, syncValue(item)]),
+        );
+    return value;
+}
+/** 三方合并：只应用相对于基线的修改；同字段冲突拒绝，不按设备时钟覆盖。 */
+export function mergeStashValue(
+    base: unknown,
+    local: unknown,
+    remote: unknown,
+    path = "meta",
+): any {
+    return mergeSyncValue(
+        syncValue(base),
+        syncValue(local),
+        syncValue(remote),
+        path,
+    );
+}
+function mergeSyncValue(
+    base: unknown,
+    local: unknown,
+    remote: unknown,
+    path: string,
+): any {
+    if (isEqual(local, remote))
+        return local === missing ? missing : structuredClone(local);
+    if (isEqual(base, local))
+        return remote === missing ? missing : structuredClone(remote);
+    if (isEqual(base, remote))
+        return local === missing ? missing : structuredClone(local);
+    if (
+        ["updatedAt", "__update_at"].includes(path.split(".").at(-1) ?? "") &&
+        typeof local === "number" &&
+        typeof remote === "number"
+    )
+        return Math.max(local, remote);
+    if (
+        Array.isArray(local) &&
+        Array.isArray(remote) &&
+        (base === missing || Array.isArray(base)) &&
+        !path.endsWith(".entries") &&
+        [
+            ...(base === missing ? [] : (base as unknown[])),
+            ...local,
+            ...remote,
+        ].every((value) => isPlainObject(value) && typeof value.id === "string")
+    ) {
+        const index = (values: any[]) => {
+            const result = new Map(values.map((value) => [value.id, value]));
+            if (result.size !== values.length)
+                throw new StashMergeConflictError(`${path}.duplicateId`);
+            return result;
+        };
+        const before = index(base === missing ? [] : (base as any[])),
+            ours = index(local),
+            theirs = index(remote);
+        return [
+            ...new Set([...before.keys(), ...ours.keys(), ...theirs.keys()]),
+        ]
+            .sort()
+            .flatMap((id) => {
+                const value = mergeSyncValue(
+                    before.get(id) ?? missing,
+                    ours.get(id) ?? missing,
+                    theirs.get(id) ?? missing,
+                    `${path}[${id}]`,
+                );
+                return value === missing ? [] : [value];
+            });
+    }
+    if (
+        isPlainObject(local) &&
+        isPlainObject(remote) &&
+        (base === missing || isPlainObject(base))
+    ) {
+        const before =
+            base === missing ? {} : (base as Record<string, unknown>);
+        const ours = local as Record<string, unknown>,
+            theirs = remote as Record<string, unknown>;
+        const result: Record<string, unknown> = {};
+        for (const key of new Set([
+            ...Object.keys(before),
+            ...Object.keys(ours),
+            ...Object.keys(theirs),
+        ])) {
+            const value = mergeSyncValue(
+                Object.hasOwn(before, key) ? before[key] : missing,
+                Object.hasOwn(ours, key) ? ours[key] : missing,
+                Object.hasOwn(theirs, key) ? theirs[key] : missing,
+                `${path}.${key}`,
+            );
+            if (value !== missing) result[key] = value;
+        }
+        return result;
+    }
+    throw new StashMergeConflictError(path);
+}
+
+export interface StashSnapshot<T extends { id: string }, M> {
+    items: T[];
+    meta: M;
+}
+export function mergeStashSnapshots<T extends { id: string }, M>(
+    base: StashSnapshot<T, M>,
+    local: StashSnapshot<T, M>,
+    remote: StashSnapshot<T, M>,
+): StashSnapshot<T, M> {
+    return {
+        items: mergeStashValue(base.items, local.items, remote.items, "items"),
+        meta: mergeStashValue(base.meta, local.meta, remote.meta),
+    };
+}
+
+/** 待传输日志只包含相对远端快照的变更，仍使用 update/delete/meta 协议。 */
+export function createStashActions<T extends BaseItem, M>(
+    base: StashSnapshot<T, M>,
+    next: StashSnapshot<T, M>,
+    timestamp: number,
+): FullAction<T>[] {
+    if (!Number.isSafeInteger(timestamp) || timestamp < 0)
+        throw new Error("Invalid stash timestamp");
+    const before = new Map(base.items.map((item) => [item.id, item]));
+    const ids = new Set(next.items.map((item) => item.id));
+    return [
+        ...next.items
+            .filter((item) => !isEqual(before.get(item.id), item))
+            .map((value) => ({
+                id: crypto.randomUUID(),
+                type: "update" as const,
+                timestamp,
+                value,
+            })),
+        ...base.items
+            .filter((item) => !ids.has(item.id))
+            .map((item) => ({
+                id: crypto.randomUUID(),
+                type: "delete" as const,
+                timestamp,
+                value: item.id,
+            })),
+        ...(isEqual(base.meta, next.meta)
+            ? []
+            : [
+                  {
+                      id: crypto.randomUUID(),
+                      type: "meta" as const,
+                      timestamp,
+                      metaValue: next.meta,
+                  },
+              ]),
+    ];
+}
+
+export function replayStashActions<T extends BaseItem>(
+    actions: FullAction<T>[],
+): T[] {
+    const items = new Map<string, T>();
+    const seen = new Map<string, FullAction<T>>();
+    for (const action of [...actions].sort(
+        (a, b) => a.timestamp - b.timestamp || a.id.localeCompare(b.id),
+    )) {
+        const previous = seen.get(action.id);
+        if (previous) {
+            if (!isEqual(previous, action))
+                throw new StashMergeConflictError(`actions[${action.id}]`);
+            continue;
+        }
+        seen.set(action.id, action);
+        if (action.type === "update") items.set(action.value.id, action.value);
+        else if (action.type === "delete") items.delete(action.value);
+        else throw new Error("Item chunks cannot contain metadata actions");
+    }
+    return [...items.values()];
+}

@@ -178,13 +178,18 @@ const [DataManagerProvider, showDataManager] = createConfirmProvider(Form, {
         "h-full w-full max-h-full max-w-full rounded-none sm:rounded-md sm:max-h-[min(520px,calc(100vh-32px))] sm:w-[90vw] sm:max-w-[500px]",
 });
 
-export default function DataManagerSettingsItem() {
+export default function DataManagerSettingsItem({
+    onOpen,
+}: {
+    onOpen?: () => void;
+} = {}) {
     const t = useIntl();
     return (
         <div className="lab">
             <Button
                 onClick={() => {
-                    showDataManager();
+                    if (onOpen) onOpen();
+                    else void showDataManager().catch(() => {});
                 }}
                 variant="ghost"
                 className="w-full py-4 rounded-none h-auto"

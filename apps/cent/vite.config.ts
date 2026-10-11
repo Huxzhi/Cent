@@ -116,6 +116,8 @@ export default defineConfig(({ mode }) => {
             format: "es",
         },
         server: {
+            port: 5174,
+            strictPort: true,
             proxy: {
                 // 这里的 '/api' 是你在代码中调用的路径前缀
                 "/google-api": {

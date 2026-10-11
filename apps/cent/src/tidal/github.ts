@@ -10,6 +10,7 @@ import type {
     StoreStructure,
     Syncer,
 } from ".";
+import { RemoteVersionConflictError } from "./remote-conflict";
 
 const loadOctokit = () =>
     import("@octokit/core").then(({ Octokit }) => {
@@ -95,6 +96,7 @@ export const createGithubSyncer = (config: {
     auth: any;
     repoPrefix: string;
     entryName: string;
+    initialMeta?: unknown;
 }): Syncer => {
     const {
         auth,
@@ -155,6 +157,7 @@ export const createGithubSyncer = (config: {
         );
 
         const structure = treeDateToStructure(treeData.tree, entryName);
+        structure.revision = latestCommitSha;
         return structure;
     };
 
@@ -186,6 +189,7 @@ export const createGithubSyncer = (config: {
         storeFullName: string,
         files: { path: string; content: any }[],
         signal?: AbortSignal,
+        expectedRevision?: string,
     ) => {
         const octokit = await getOctokit();
 
@@ -277,6 +281,11 @@ export const createGithubSyncer = (config: {
         );
         const baseTreeSha = commitData.tree.sha;
         const latestCommitSha = refData.object.sha;
+        if (
+            expectedRevision !== undefined &&
+            latestCommitSha !== expectedRevision
+        )
+            throw new RemoteVersionConflictError();
 
         const { data: newTree } = await octokit.request(
             "POST /repos/{owner}/{repo}/git/trees",
@@ -305,16 +314,32 @@ export const createGithubSyncer = (config: {
             },
         );
 
-        await octokit.request("PATCH /repos/{owner}/{repo}/git/refs/{ref}", {
-            owner,
-            repo,
-            ref: `heads/${repoData.default_branch}`,
-            sha: newCommit.sha,
-            request: {
-                signal,
-            },
-        });
-        return treeDateToStructure(newTree.tree, config.entryName);
+        try {
+            await octokit.request(
+                "PATCH /repos/{owner}/{repo}/git/refs/{ref}",
+                {
+                    owner,
+                    repo,
+                    ref: `heads/${repoData.default_branch}`,
+                    sha: newCommit.sha,
+                    force: false,
+                    request: {
+                        signal,
+                    },
+                },
+            );
+        } catch (error) {
+            if (
+                expectedRevision !== undefined &&
+                (error as { status?: number }).status === 422
+            )
+                throw new RemoteVersionConflictError();
+            throw error;
+        }
+        return {
+            ...treeDateToStructure(newTree.tree, config.entryName),
+            revision: newCommit.sha,
+        };
     };
 
     const transformAsset = (file: File, storeFullName: string) => {
@@ -387,7 +412,9 @@ export const createGithubSyncer = (config: {
                         repo: storeName,
                         path: "meta.json",
                         message: "Initial commit by Tidal",
-                        content: encode(JSON.stringify({})),
+                        content: encode(
+                            JSON.stringify(config.initialMeta ?? {}),
+                        ),
                     },
                 );
                 break; // 成功则跳出循环
@@ -439,7 +466,7 @@ export const createGithubSyncer = (config: {
             },
         );
         return repos
-            .filter((repo) => repo.name.startsWith(config.repoPrefix))
+            .filter((repo) => repo.name.startsWith(`${config.repoPrefix}-`))
             .map((repo) => repo.full_name);
     };
 

@@ -1,19 +1,25 @@
 import type { Modal } from "@/components/modal";
+import { accountingRepository } from "@/database/accounting";
 import { Scheduler } from "@/database/scheduler";
 import { BillIndexedDBStorage } from "@/database/storage";
-import type { Bill } from "@/ledger/type";
 import { t } from "@/locale";
 import { createTidal } from "@/tidal";
 import { createGithubSyncer } from "@/tidal/github";
 import type { ZenPost } from "@/zen/types";
+import {
+    ACCOUNTING_ENTRY_NAME,
+    ACCOUNTING_REPO_PREFIX,
+    createAccountingSync,
+    emptyAccountingRemoteMeta,
+} from "../../../tidal/accounting";
 import type { SyncEndpointFactory } from "../type";
 import { createLoginAPI } from "./login";
 
 const ZEN_ENTRY_NAME = "zen";
 
 const config = {
-    repoPrefix: "cent-journal",
-    entryName: "ledger",
+    repoPrefix: ACCOUNTING_REPO_PREFIX,
+    entryName: ACCOUNTING_ENTRY_NAME,
     orderKeys: ["time"],
 };
 
@@ -38,16 +44,18 @@ export const GithubEndpoint: SyncEndpointFactory = {
     manuallyLogin,
     init: ({ modal }) => {
         LoginAPI.afterLogin();
-        const repo = createTidal<Bill>({
-            storageFactory: (name) => new BillIndexedDBStorage(`book-${name}`),
+        const syncer = createGithubSyncer({
+            auth: LoginAPI.getToken,
             entryName: config.entryName,
-            syncerFactory: () =>
-                createGithubSyncer({
-                    auth: LoginAPI.getToken,
-                    entryName: config.entryName,
-                    repoPrefix: config.repoPrefix,
-                }),
+            repoPrefix: config.repoPrefix,
+            initialMeta: emptyAccountingRemoteMeta,
         });
+        const repo = createAccountingSync(syncer, accountingRepository);
+        const unsupportedBillOperation = async () => {
+            throw new Error(
+                "Legacy Bill storage is not supported by accounting GitHub sync",
+            );
+        };
         const zenRepo = createTidal<ZenPost>({
             storageFactory: (name) =>
                 new BillIndexedDBStorage(`book-${name}--${ZEN_ENTRY_NAME}`),
@@ -59,11 +67,6 @@ export const GithubEndpoint: SyncEndpointFactory = {
                     repoPrefix: config.repoPrefix,
                 }),
         });
-
-        const toBookName = (bookId: string) => {
-            const [owner, repo] = bookId.split("/");
-            return repo.replace(`${config.repoPrefix}-`, "");
-        };
 
         const inviteForBook = async (bookId: string) => {
             await modal.prompt({ title: t("invite-tip") });
@@ -81,41 +84,38 @@ export const GithubEndpoint: SyncEndpointFactory = {
 
         // ledger 与 zen 顺序同步：避免对同一 git ref 并发提交导致 non-fast-forward
         const scheduler = new Scheduler(async (signal) => {
-            const [ledgerFinished, cancelLedger] = repo.sync();
-            signal.onabort = cancelLedger;
-            await ledgerFinished;
+            for (const book of await accountingRepository.listBooks()) {
+                const local = await accountingRepository.loadBook(book.id);
+                if (local.remoteId)
+                    await repo.syncBook(book.id, undefined, signal);
+            }
             const [zenFinished, cancelZen] = zenRepo.sync();
             signal.onabort = cancelZen;
             await zenFinished;
         });
 
         return {
+            accounting: repo,
             logout: async () => {
-                repo.detach();
-                zenRepo.detach();
+                await zenRepo.detach();
             },
-            getUserInfo: repo.getUserInfo,
-            getCollaborators: repo.getCollaborators,
-            getOnlineAsset: (src, store) => repo.getAsset(src, store),
+            getUserInfo: syncer.getUserInfo,
+            getCollaborators: syncer.getCollaborators,
+            getOnlineAsset: (src, store) => syncer.getAsset(src, store),
 
             fetchAllBooks: async (...args) => {
-                const res = await repo.fetchAllStore(...args);
-                return res.map((v) => ({ id: v, name: toBookName(v) }));
+                return repo.fetchAllBooks(...args);
             },
-            createBook: repo.create,
-            initBook: async (name) => {
-                await Promise.all([repo.init(name), zenRepo.init(name)]);
-            },
+            createBook: unsupportedBillOperation,
+            initBook: unsupportedBillOperation,
             deleteBook,
             inviteForBook,
 
-            batch: async (...args) => {
-                await repo.batch(...args);
-                scheduler.schedule();
-            },
-            getMeta: repo.getMeta,
-            getAllItems: repo.getAllItems,
-            onChange: repo.onChange,
+            batch: unsupportedBillOperation,
+            getMeta: unsupportedBillOperation,
+            getAllItems: unsupportedBillOperation,
+            // 旧 Bill 订阅不能消费复式账本事件；新页面使用 accounting.onChange。
+            onChange: () => () => {},
 
             batchZen: async (...args) => {
                 await zenRepo.batch(...args);
@@ -125,11 +125,20 @@ export const GithubEndpoint: SyncEndpointFactory = {
             onZenChange: zenRepo.onChange,
 
             getIsNeedSync: async () =>
-                (await repo.hasStashes()) || (await zenRepo.hasStashes()),
+                (
+                    await Promise.all(
+                        (
+                            await accountingRepository.listBooks()
+                        ).map((book) => accountingRepository.loadBook(book.id)),
+                    )
+                ).some((book) => book.remoteId && book.pendingSync) ||
+                (await zenRepo.hasStashes()),
             onSync: scheduler.onProcess.bind(scheduler),
             toSync: scheduler.schedule.bind(scheduler),
 
-            forceNeedSync: repo.forceNeedSync,
+            forceNeedSync: () => {
+                void scheduler.schedule();
+            },
         };
     },
 };

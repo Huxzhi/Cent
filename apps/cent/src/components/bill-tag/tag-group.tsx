@@ -21,17 +21,22 @@ import {
     FormField,
     FormItem,
     FormLabel,
+    FormMessage,
 } from "../ui/form";
 import { Input } from "../ui/input";
 import { Switch } from "../ui/switch";
 
 const createFormSchema = (t: any) =>
     z.object({
-        name: z.string().check(
-            z.maxLength(50, {
-                message: t("max-name-length-limit", { n: 50 }),
-            }),
-        ),
+        name: z
+            .string()
+            .trim()
+            .min(1, { message: t("input-tag-group-name") })
+            .check(
+                z.maxLength(50, {
+                    message: t("max-name-length-limit", { n: 50 }),
+                }),
+            ),
         color: z.string(),
         singleSelect: z.optional(z.boolean()),
         required: z.optional(z.boolean()),
@@ -91,7 +96,7 @@ export const EditTagGroupForm = ({
     const formSchema = useMemo(() => createFormSchema(t), [t]);
     const form = useForm<z.infer<typeof formSchema>>({
         resolver: zodResolver(formSchema) as any,
-        defaultValues: edit ?? { color: "gray" },
+        defaultValues: { name: "", color: "gray", tagIds: [], ...edit },
     });
     const isCreate = edit === undefined;
 
@@ -126,6 +131,7 @@ export const EditTagGroupForm = ({
                                     <FormControl>
                                         <Input {...field} maxLength={50} />
                                     </FormControl>
+                                    <FormMessage />
                                 </FormItem>
                             );
                         }}

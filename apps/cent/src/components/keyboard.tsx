@@ -486,12 +486,19 @@ export const CalculatorValue = ({
 export const CalculatorKeyboard = ({
     className,
     onKey,
+    disabled,
+    repeatDisabled,
+    repeatLabel,
 }: {
     className?: string;
     onKey?: (v: string) => void;
+    disabled?: boolean;
+    repeatDisabled?: boolean;
+    repeatLabel?: string;
 }) => {
     const t = useIntl();
-    const { handleButtonClick, Layout } = useContext(CalculatorContext)!;
+    const ctx = useContext(CalculatorContext);
+    const Layout = ctx?.Layout ?? getLayout();
     return (
         <div className={cn("grid grid-cols-8 gap-2", className)}>
             {Layout.map((row) => (
@@ -499,8 +506,19 @@ export const CalculatorKeyboard = ({
                     variant="ghost"
                     key={row.label}
                     data-label={row.label}
-                    onPointerDown={() => {
-                        handleButtonClick(row.label);
+                    type="button"
+                    disabled={disabled || (row.label === "r" && repeatDisabled)}
+                    aria-label={
+                        row.label === "c"
+                            ? t("accounting-backspace")
+                            : row.label === "r"
+                              ? (repeatLabel ?? t("add-again"))
+                              : row.label === "x"
+                                ? "×"
+                                : row.label
+                    }
+                    onClick={() => {
+                        ctx?.handleButtonClick(row.label);
                         onKey?.(row.label);
                     }}
                     className={cn(
@@ -514,7 +532,9 @@ export const CalculatorKeyboard = ({
                     ) : row.label === "r" ? (
                         <div className="flex flex-col gap-1 items-center">
                             <i className="icon-[mdi--reload]"></i>
-                            <div className="text-xs">{t("add-again")}</div>
+                            <div className="text-xs">
+                                {repeatLabel ?? t("add-again")}
+                            </div>
                         </div>
                     ) : row.label === "x" ? (
                         <span data-label>×</span>

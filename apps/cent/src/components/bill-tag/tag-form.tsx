@@ -4,7 +4,7 @@ import { EditTagForm } from "./tag";
 export const [EditTagProvider, showEditTag] = createConfirmProvider(
     EditTagForm,
     {
-        dialogTitle: "Edit Tag Group",
+        dialogTitle: "edit-tag",
         dialogModalClose: false,
         fade: true,
         swipe: false,

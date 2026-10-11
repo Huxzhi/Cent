@@ -45,11 +45,13 @@ export function SmartImageCore({
     const objectUrlRef = useRef<string | null>(null);
 
     useEffect(() => {
-        const book = useBookStore.getState().currentBookId;
-        if (!book) {
+        if (typeof source === "string" && source.startsWith("data:image/")) {
+            setUrl(source);
             return;
         }
         if (!(source instanceof File)) {
+            const book = useBookStore.getState().currentBookId;
+            if (!book) return;
             // 普通字符串 url
             if (StorageAPI.getOnlineAsset) {
                 cacheInDB(StorageAPI.getOnlineAsset, GetOnlineAssetsCacheKey)?.(

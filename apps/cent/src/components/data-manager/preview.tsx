@@ -191,7 +191,7 @@ export const PreviewForm = ({
                 asMine,
                 creators,
                 meLabel: t("me"),
-                unknownLabel: "unknown-user",
+                unknownLabel: t("me"),
                 t,
             }),
         [edit?.meta, importStrategy, asMine, creators, t],

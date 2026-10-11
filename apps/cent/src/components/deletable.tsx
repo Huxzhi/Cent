@@ -6,11 +6,13 @@ export default function Deletable({
     icon,
     className,
     onDelete,
+    deleteLabel,
 }: {
     children?: ReactNode;
     icon?: ReactNode;
     className?: string;
     onDelete?: () => void;
+    deleteLabel?: string;
 }) {
     if (!children) {
         return null;
@@ -19,6 +21,8 @@ export default function Deletable({
         <div className={cn("relative", className)}>
             {children}
             <button
+                aria-label={deleteLabel}
+                title={deleteLabel}
                 className="delete-button cursor-pointer absolute top-0 right-0 w-4 h-4 flex justify-center items-center translate-x-[30%] -translate-y-[30%] rounded-full bg-destructive"
                 type="button"
                 onClick={onDelete}

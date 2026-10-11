@@ -1,11 +1,12 @@
 import { useCallback, useState } from "react";
 import { toast } from "sonner";
-import { useShallow } from "zustand/shallow";
+import { useStore } from "zustand";
 import PopupLayout from "@/layouts/popup-layout";
 import { useIntl } from "@/locale";
 import { measure } from "@/measurement";
-import { useLedgerStore } from "@/store/ledger";
+import { accountingStore } from "@/store/accounting";
 import { decodeApiKey, encodeApiKey } from "@/utils/api-key";
+import { FormError, useFormAction } from "../accounting/shared";
 import createConfirmProvider from "../confirm";
 import modal from "../modal";
 import { Button } from "../ui/button";
@@ -14,10 +15,12 @@ import { Input } from "../ui/input";
 // 地图配置表单
 function MapConfigForm({ onCancel }: { onCancel?: () => void }) {
     const t = useIntl();
+    const { error, submitting, run } = useFormAction();
 
     // 获取当前配置
-    const mapConfig = useLedgerStore(
-        useShallow((state) => state.infos?.meta.map),
+    const mapConfig = useStore(
+        accountingStore,
+        (state) => state.current?.data.mapConfig,
     );
 
     const [amapKey, setAmapKey] = useState(
@@ -43,16 +46,16 @@ function MapConfigForm({ onCancel }: { onCancel?: () => void }) {
         }
 
         // 保存配置
-        await useLedgerStore.getState().updateGlobalMeta((prev) => {
-            if (!prev.map) {
-                prev.map = {};
-            }
-
-            prev.map.amapKey = encodeApiKey(amapKey.trim());
-            prev.map.amapSecurityCode = encodeApiKey(amapSecurityCode.trim());
-
-            return prev;
-        });
+        await accountingStore.getState().updateData(
+            (data) => ({
+                ...data,
+                mapConfig: {
+                    amapKey: encodeApiKey(amapKey.trim()),
+                    amapSecurityCode: encodeApiKey(amapSecurityCode.trim()),
+                },
+            }),
+            Date.now(),
+        );
         measure("feature_config_changed", { feature: "map", action: "enable" });
 
         toast.success(t("map-config-saved"));
@@ -62,13 +65,9 @@ function MapConfigForm({ onCancel }: { onCancel?: () => void }) {
     const handleClear = useCallback(async () => {
         await modal.prompt({ title: t("are-you-sure-to-clear-map-config") });
         // 清除配置
-        await useLedgerStore.getState().updateGlobalMeta((prev) => {
-            if (prev.map) {
-                delete prev.map.amapKey;
-                delete prev.map.amapSecurityCode;
-            }
-            return prev;
-        });
+        await accountingStore
+            .getState()
+            .updateData((data) => ({ ...data, mapConfig: {} }), Date.now());
         measure("feature_config_changed", {
             feature: "map",
             action: "disable",
@@ -192,11 +191,13 @@ function MapConfigForm({ onCancel }: { onCancel?: () => void }) {
 
                 {/* 按钮组 */}
                 <div className="px-4 flex flex-col gap-2">
+                    <FormError error={error} />
                     {hasConfig && (
                         <Button
                             variant="outline"
                             size="sm"
-                            onClick={handleClear}
+                            disabled={submitting}
+                            onClick={() => void run(handleClear)}
                             className="w-full text-red-500 hover:text-red-600"
                         >
                             {t("clear-map-config")}
@@ -214,7 +215,8 @@ function MapConfigForm({ onCancel }: { onCancel?: () => void }) {
                         <Button
                             variant="default"
                             size="sm"
-                            onClick={handleSave}
+                            disabled={submitting}
+                            onClick={() => void run(handleSave)}
                             className="flex-1"
                         >
                             {t("save")}

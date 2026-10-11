@@ -29,7 +29,7 @@ body {
 	height: 100vh;
 	min-width: 200px;
 	min-height: 200px;
-	touch-action: none;
+	touch-action: pan-y;
 }
 
 #root {

@@ -239,6 +239,7 @@ type DialogContentProps = Omit<
     } & {
         swipe?: boolean;
         fade?: boolean;
+        backdrop?: boolean;
     };
 
 const toPx = (v: string) => {
@@ -260,6 +261,7 @@ function DialogContent({
     transition = transitionProps,
     fade,
     swipe,
+    backdrop = true,
     ...props
 }: DialogContentProps) {
     const isDesktop = useIsDesktop();
@@ -267,11 +269,22 @@ function DialogContent({
     const [isPresent, safeToRemove] = usePresence(); // 关键：获取是否正在被销毁
 
     // 动态选择变体
-    const currentVariant = fade
+    const baseVariant = fade
         ? animationVariants.fade
         : isDesktop
           ? animationVariants.desktop
           : animationVariants.mobile;
+    const currentVariant = useMemo(
+        () =>
+            backdrop
+                ? baseVariant
+                : {
+                      initial: { ...baseVariant.initial, boxShadow: "none" },
+                      animate: { ...baseVariant.animate, boxShadow: "none" },
+                      exit: { ...baseVariant.exit, boxShadow: "none" },
+                  },
+        [backdrop, baseVariant],
+    );
     const transitionNative = useMemo(
         () => transformMotionToNative(transition),
         [transition],
@@ -358,7 +371,9 @@ function DialogContent({
                 const offsetX = Math.max(0, Math.min(fullWidth, offset.x));
                 root.style.transform = `translate3d(${offsetX}px,0,0)`;
                 const p = offsetX / fullWidth;
-                root.style.boxShadow = `0 0 0 150vmax rgba(0, 0, 0, ${0.5 - 0.5 * p})`;
+                root.style.boxShadow = backdrop
+                    ? `0 0 0 150vmax rgba(0, 0, 0, ${0.5 - 0.5 * p})`
+                    : "none";
             },
             onEnd: (offset, { fullWidth }) => {
                 const offsetX = Math.max(0, Math.min(fullWidth, offset.x));
@@ -396,7 +411,9 @@ function DialogContent({
                         [
                             {
                                 transform: "translate3d(0,0,0)",
-                                boxShadow: "0 0 0 150vmax rgba(0,0,0,0.5)",
+                                boxShadow: backdrop
+                                    ? "0 0 0 150vmax rgba(0,0,0,0.5)"
+                                    : "none",
                             },
                         ],
                         {
@@ -414,7 +431,7 @@ function DialogContent({
             },
         });
         return stop;
-    }, [isDesktop, fade, onClose]);
+    }, [isDesktop, fade, onClose, backdrop]);
 
     const initialPlayed = useRef(false);
     const exitPlayed = useRef(false);
@@ -422,6 +439,9 @@ function DialogContent({
     useEffect(() => {
         if (isPresent) {
             if (initialPlayed.current) {
+                if (contentRef.current)
+                    contentRef.current.style.boxShadow =
+                        currentVariant.animate.boxShadow;
                 return;
             }
             initialPlayed.current = true;
@@ -438,7 +458,8 @@ function DialogContent({
                     fill: "forwards",
                 })
                 .finished.then((ani) => {
-                    ani.commitStyles();
+                    // Final styles are already inline. The dialog may have
+                    // unmounted before this animation finishes.
                     ani.cancel();
                 });
         } else {

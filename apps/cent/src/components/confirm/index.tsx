@@ -1,6 +1,8 @@
 import { VisuallyHidden } from "radix-ui";
 import { type ReactNode, useEffect, useMemo } from "react";
+import { useIntl as useOriginalIntl } from "react-intl";
 import { useShallow } from "zustand/shallow";
+import { useIntl } from "@/locale";
 import { cn } from "@/utils";
 import {
     Dialog,
@@ -10,6 +12,7 @@ import {
     DialogPortal,
     DialogTitle,
 } from "../ui/dialog";
+import { getConfirmBackdropId } from "./backdrop";
 import { useGlobalConfirmStore } from "./state"; // 引入上面创建的全局 store
 
 export default function createConfirmProvider<Value, Returned = Value>(
@@ -25,6 +28,7 @@ export default function createConfirmProvider<Value, Returned = Value>(
         contentClassName,
         fade,
         swipe,
+        closeDisabled,
     }: {
         dialogTitle: string | ReactNode;
         dialogDescription?: string | ReactNode;
@@ -32,15 +36,25 @@ export default function createConfirmProvider<Value, Returned = Value>(
         contentClassName?: string;
         fade?: boolean;
         swipe?: boolean;
+        /** A live predicate used by forms while their save operation is pending. */
+        closeDisabled?: () => boolean;
     },
 ) {
     // 1. 为每个 Provider 实例生成一个唯一的 ID (在闭包中唯一)
     const instanceId = `confirm_${Math.random().toString(36).slice(2, 9)}`;
 
     function Confirm() {
+        const t = useIntl();
+        const { messages } = useOriginalIntl();
+        const label = (value: string | ReactNode) =>
+            typeof value === "string" && value in messages ? t(value) : value;
         // 2. 仅监听属于自己 ID 的那部分状态
         const state = useGlobalConfirmStore(
             useShallow((s) => s.instances[instanceId]),
+        );
+        // 小弹窗接管唯一遮罩，整页之间继续共用遮罩。
+        const backdrop = useGlobalConfirmStore(
+            (s) => getConfirmBackdropId(s.instances) === instanceId,
         );
         const layerStyle = useMemo(
             () =>
@@ -59,6 +73,7 @@ export default function createConfirmProvider<Value, Returned = Value>(
         const { visible, edit, controller, openId } = state;
 
         const onCancel = () => {
+            if (closeDisabled?.()) return;
             controller?.cancel();
         };
 
@@ -88,6 +103,7 @@ export default function createConfirmProvider<Value, Returned = Value>(
                         style={layerStyle}
                     >
                         <DialogContent
+                            backdrop={backdrop}
                             fade={fade}
                             swipe={swipe}
                             className={cn(
@@ -101,13 +117,17 @@ export default function createConfirmProvider<Value, Returned = Value>(
                                 e.preventDefault();
                             }}
                             onInteractOutside={(e) => {
-                                if (!dialogModalClose) e.preventDefault();
+                                if (!dialogModalClose || closeDisabled?.())
+                                    e.preventDefault();
+                            }}
+                            onEscapeKeyDown={(e) => {
+                                if (closeDisabled?.()) e.preventDefault();
                             }}
                         >
                             <VisuallyHidden.Root>
-                                <DialogTitle>{dialogTitle}</DialogTitle>
+                                <DialogTitle>{label(dialogTitle)}</DialogTitle>
                                 <DialogDescription>
-                                    {dialogDescription}
+                                    {label(dialogDescription)}
                                 </DialogDescription>
                             </VisuallyHidden.Root>
                             <Form
@@ -124,16 +144,16 @@ export default function createConfirmProvider<Value, Returned = Value>(
 
     // 4. 暴露的 open 方法封装了 instanceId
     const confirm = (value?: Value) => {
-        const [promise, cancel] = useGlobalConfirmStore
+        const [promise] = useGlobalConfirmStore
             .getState()
-            .open<Value, Returned>(instanceId, value);
+            .open<Value, Returned>(instanceId, value, fade);
         return promise;
     };
 
     const withController = (value?: Value) => {
         const [promise, cancel] = useGlobalConfirmStore
             .getState()
-            .open<Value, Returned>(instanceId, value);
+            .open<Value, Returned>(instanceId, value, fade);
         return { promise, cancel };
     };
 

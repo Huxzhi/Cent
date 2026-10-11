@@ -6,6 +6,7 @@ import PopupLayout from "@/layouts/popup-layout";
 import type { BillTagGroup } from "@/ledger/type";
 import { useIntl } from "@/locale";
 import { cn } from "@/utils";
+import { FormError, useFormAction } from "../accounting/shared";
 import Tag from "../tag";
 import { Button } from "../ui/button";
 import type { EditTag } from "./tag";
@@ -28,27 +29,30 @@ export default function TagList({
 }) {
     const t = useIntl();
     const { updateTag, grouped, updateGroup, topUpGroup } = useTag();
+    const { error, submitting, run } = useFormAction();
 
     const toUpdateTagGroup = async (group?: BillTagGroup) => {
-        const newGroup = await showEditTagGroup(group);
+        const newGroup = await showEditTagGroup(group).catch(() => undefined);
+        if (newGroup === undefined) return;
         if (newGroup === "delete") {
             if (group?.id) {
-                updateGroup(group?.id, undefined);
+                await run(() => updateGroup(group.id, undefined));
             }
             return;
         }
-        await updateGroup(group?.id ?? v4(), newGroup);
+        await run(() => updateGroup(group?.id ?? v4(), newGroup));
     };
 
     const toUpdateTag = async (tag?: EditTag) => {
-        const newTag = await showEditTag(tag);
+        const newTag = await showEditTag(tag).catch(() => undefined);
+        if (newTag === undefined) return;
         if (newTag === "delete") {
             if (tag?.id) {
-                updateTag(tag?.id, undefined);
+                await run(() => updateTag(tag.id as string, undefined));
             }
             return;
         }
-        await updateTag(tag?.id ?? v4(), newTag);
+        await run(() => updateTag(tag?.id ?? v4(), newTag));
     };
 
     const [animate, setAnimate] = useState(false);
@@ -59,16 +63,25 @@ export default function TagList({
             title={t("edit-tags")}
             right={
                 <div className="flex items-center gap-2">
-                    <Button onClick={() => toUpdateTag()} variant="secondary">
+                    <Button
+                        disabled={submitting}
+                        aria-label={t("add-new-tag")}
+                        onClick={() => toUpdateTag()}
+                        variant="secondary"
+                    >
                         <i className="icon-[mdi--tag-plus-outline]"></i>
                     </Button>
 
-                    <Button onClick={() => toUpdateTagGroup()}>
+                    <Button
+                        disabled={submitting}
+                        onClick={() => toUpdateTagGroup()}
+                    >
                         {t("add-new-tag-group")}
                     </Button>
                 </div>
             }
         >
+            <FormError error={error} />
             <div className="flex items-center justify-between px-2">
                 <div className="px-2 text-xs text-foreground/80">
                     {t("click-tag-to-edit")}
@@ -108,8 +121,10 @@ export default function TagList({
                                                         onClick={async () => {
                                                             setAnimate(true);
                                                             await Promise.resolve();
-                                                            topUpGroup(
-                                                                group.id,
+                                                            await run(() =>
+                                                                topUpGroup(
+                                                                    group.id,
+                                                                ),
                                                             );
                                                         }}
                                                     >

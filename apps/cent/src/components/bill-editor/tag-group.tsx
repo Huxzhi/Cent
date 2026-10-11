@@ -1,6 +1,7 @@
 /** biome-ignore-all lint/a11y/noStaticElementInteractions: <explanation> */
 /** biome-ignore-all lint/a11y/useKeyWithClickEvents: <explanation> */
 import {
+    type ComponentProps,
     type ReactNode,
     useCallback,
     useEffect,
@@ -21,14 +22,19 @@ function TagTrigger({
     selected,
     color,
     onClick,
+    className,
+    ...props
 }: {
     children?: ReactNode;
     selected?: boolean;
     color?: string;
     onClick?: () => void;
-}) {
+} & ComponentProps<"button">) {
     return (
-        <div
+        <button
+            type="button"
+            {...props}
+            aria-pressed={selected}
             onPointerDown={(e) => {
                 e.preventDefault();
             }}
@@ -36,6 +42,7 @@ function TagTrigger({
             className={cn(
                 "flex flex-shrink-0 items-center justify-center gap-2 with-tag-color border border-input px-2 py-1 rounded-md cursor-pointer",
                 `tag-${color}`,
+                className,
             )}
         >
             <div
@@ -49,7 +56,7 @@ function TagTrigger({
             >
                 {children}
             </div>
-        </div>
+        </button>
     );
 }
 
@@ -74,6 +81,7 @@ function TagGroup({
     // 如果标签组只包含一个标签，那么无需展开弹窗，可以点击直接选中/取消选中该标签
     if (group.tagIds?.length === 1) {
         const singleTagId = group.tagIds[0];
+        const tag = group.tags.find((item) => item.id === singleTagId);
         const isSingleSelected = groupSelected.some(
             (v) => v.id === singleTagId,
         );
@@ -83,11 +91,17 @@ function TagGroup({
                 selected={isSingleSelected}
                 onClick={() => {
                     if (isSingleSelected) {
+                        if (group.required) return;
                         onSelectChange(
                             selected?.filter((v) => v !== singleTagId) ?? [],
                         );
                     } else {
-                        onSelectChange([...(selected ?? []), singleTagId]);
+                        onSelectChange(
+                            [...(selected ?? []), singleTagId],
+                            tag?.preferCurrency
+                                ? { preferCurrency: tag.preferCurrency }
+                                : undefined,
+                        );
                     }
                 }}
             >
@@ -97,7 +111,7 @@ function TagGroup({
     }
     return (
         <DropdownMenu open={open} onOpenChange={setOpen}>
-            <DropdownMenuTrigger className="flex-shrink-0">
+            <DropdownMenuTrigger asChild>
                 <TagTrigger
                     color={group.color}
                     selected={groupSelected.length > 0}

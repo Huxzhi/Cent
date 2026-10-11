@@ -5,13 +5,20 @@ import { StrictMode, Suspense } from "react";
 import { createRoot } from "react-dom/client";
 import "./index.css";
 
-import Login from "./components/login";
-import { initIntl, LocaleProvider } from "./locale/index";
+import { initIntl, intl, LocaleProvider, t } from "./locale/index";
 import { measure } from "./measurement";
+import { accountingStore } from "./store/accounting";
 import { usePreferenceStore } from "./store/preference";
 import { register as registerLaunchQueue } from "./utils/launch-queue";
 import { lazyWithReload } from "./utils/lazy";
 import { registerPWAUpdates } from "./utils/pwa";
+import { configureTime } from "./utils/time";
+
+configureTime({
+    getTimeZone: () => accountingStore.getState().current?.data.timeZone,
+    getLocale: () => intl?.locale,
+    translate: t,
+});
 
 registerPWAUpdates();
 
@@ -27,14 +34,9 @@ initIntl(lang).then(() => {
                 <Suspense>
                     <Rooot />
                 </Suspense>
-                <Login />
             </LocaleProvider>
         </StrictMode>,
     );
 });
 
 registerLaunchQueue();
-
-import("./agent-api").then(({ bootAgentApi }) => {
-    void bootAgentApi();
-});

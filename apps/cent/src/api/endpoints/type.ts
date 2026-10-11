@@ -2,6 +2,7 @@ import type { Modal } from "@/components/modal";
 import type { Action, Full } from "@/database/stash";
 import type { Bill } from "@/ledger/type";
 import type { ZenPost } from "@/zen/types";
+import type { createAccountingSync } from "../../tidal/accounting";
 export type ChangeListener = (args: { bookId: string }) => void;
 
 export type UserInfo = {
@@ -20,6 +21,7 @@ export type SyncEndpointConfig = {
 };
 
 export type SyncEndpoint = {
+    accounting?: ReturnType<typeof createAccountingSync>;
     logout: () => Promise<any>;
 
     fetchAllBooks: () => Promise<Book[]>;

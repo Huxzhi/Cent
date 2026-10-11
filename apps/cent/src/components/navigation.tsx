@@ -1,12 +1,13 @@
 import { useMemo } from "react";
 import { createPortal } from "react-dom";
 import { useLocation, useNavigate } from "react-router";
-import ComplexAddButton from "./add-button";
+import { useIntl } from "@/locale";
+import { BaseButton } from "./add-button/base";
 import { goAddBill } from "./bill-editor";
-import { afterAddBillPromotion } from "./promotion";
 import { showSettings } from "./settings";
 
 export default function Navigation() {
+    const t = useIntl();
     const location = useLocation();
     const navigate = useNavigate();
 
@@ -28,6 +29,7 @@ export default function Navigation() {
             {/* search */}
             <button
                 type="button"
+                aria-label={t("accounting-nav-search")}
                 className={`w-14 h-14 sm:w-10 sm:h-10 cursor-pointer flex items-center justify-center rounded-full shadow-md m-2 transition-all hover:bg-[#9a9ba2] active:bg-[#cdcdd0] dark:hover:bg-[#aba8a5] ${
                     currentTab === "/search"
                         ? "bg-[#cdcdd0] dark:bg-[#918c89]"
@@ -42,6 +44,7 @@ export default function Navigation() {
             <div className="flex items-center rounded-full p-1 bg-background dark:bg-stone-500 w-56 h-14 m-2 shadow-md sm:flex-col sm:w-10 sm:h-50 sm:-order-1">
                 <button
                     type="button"
+                    aria-label={t("accounting-nav-home")}
                     className={`flex-1 h-full w-full transition rounded-full flex items-center justify-center cursor-pointer hover:bg-[#9a9ba2] active:bg-[#cdcdd0] ${
                         currentTab === "/" ? "bg-foreground/20" : ""
                     }`}
@@ -50,15 +53,21 @@ export default function Navigation() {
                     <i className="icon-[mdi--format-align-center] size-5"></i>
                 </button>
 
-                <ComplexAddButton
+                <BaseButton
+                    aria-label={t("accounting-nav-add")}
                     onClick={() => {
-                        goAddBill();
-                        afterAddBillPromotion();
+                        void goAddBill().catch(() => {});
                     }}
-                />
+                >
+                    <i
+                        aria-hidden
+                        className="icon-[mdi--add] text-white size-7"
+                    />
+                </BaseButton>
 
                 <button
                     type="button"
+                    aria-label={t("accounting-nav-stat")}
                     className={`flex-1 h-full w-full transition-all rounded-full flex items-center justify-center cursor-pointer hover:bg-[#9a9ba2] active:bg-[#cdcdd0] ${
                         currentTab === "/stat" ? "bg-foreground/20" : ""
                     }`}
@@ -73,9 +82,10 @@ export default function Navigation() {
             {/* settings */}
             <button
                 type="button"
+                aria-label={t("accounting-nav-settings")}
                 className="w-14 h-14 sm:w-10 sm:h-10 cursor-pointer flex items-center justify-center rounded-full shadow-md m-2 transition-all hover:bg-[#9a9ba2] active:bg-[#cdcdd0] bg-background dark:bg-stone-500 dark:hover:bg-[#aba8a5]"
                 onClick={() => {
-                    showSettings();
+                    void showSettings().catch(() => {});
                 }}
             >
                 <i className="icon-[mdi--more-horiz] size-5"></i>

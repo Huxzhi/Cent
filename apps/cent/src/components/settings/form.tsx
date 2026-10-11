@@ -1,11 +1,13 @@
-import { StorageAPI, StorageDeferredAPI } from "@/api/storage";
+import type { ReactNode } from "react";
+import { toast } from "sonner";
+import { StorageAPI } from "@/api/storage";
 import PopupLayout from "@/layouts/popup-layout";
 import { useIntl } from "@/locale";
 import { useUserStore } from "@/store/user";
+import { showAccountingBooks } from "../accounting/book-manager";
 import TagSettingsItem from "../bill-tag";
 import { BookSettings } from "../book";
 import Budget from "../budget";
-import CategorySettingsItem from "../category";
 import CurrencySettingsItem from "../currency";
 import DataManagerSettingsItem from "../data-manager";
 import modal from "../modal";
@@ -14,6 +16,7 @@ import SponsorBanner, { SponsorProvider } from "../sponsor";
 import { Button } from "../ui/button";
 import WidgetSettings from "../widget";
 import AboutSettingsItem, { AdvancedGuideItem } from "./about";
+import AccountSettingsItem from "./accounts";
 import AgentApiSettingsItem from "./agent-api";
 import AssistantSettingsItem from "./assistant";
 import LabSettingsItem from "./lab";
@@ -22,10 +25,27 @@ import MapSettingsItem from "./map-settings";
 import PresetSettingsItem from "./preset";
 import QuickEntrySettingsItem from "./quick-entry";
 import ThemeSettingsItem from "./theme";
+import TimeZoneSettingsItem from "./time-zone";
 import UserSettingsItem from "./user";
 import VoiceSettingsItem from "./voice";
 import ZenSettingsItem from "./zen";
 
+// 复用原设置项的外观；未迁移的操作不能写入旧 Bill 账本。
+function PendingBookFeature({ children }: { children: ReactNode }) {
+    const t = useIntl();
+    return (
+        <div
+            role="presentation"
+            onClickCapture={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                toast.info(t("accounting-feature-pending"));
+            }}
+        >
+            {children}
+        </div>
+    );
+}
 function UserInfo() {
     const t = useIntl();
     const { id, avatar_url, name, expired } = useUserStore();
@@ -94,7 +114,6 @@ function UserInfo() {
 }
 
 export default function SettingsForm({
-    onConfirm,
     onCancel,
 }: {
     onConfirm?: (isEdit: boolean) => void;
@@ -110,7 +129,7 @@ export default function SettingsForm({
             title={t("settings")}
             className="h-full overflow-hidden"
         >
-            <div className="divide-y divide-solid flex flex-col overflow-hidden">
+            <div className="divide-y divide-solid flex flex-col overflow-hidden flex-1 min-h-0">
                 <UserInfo />
                 <div className="flex-1 overflow-y-auto flex flex-col py-4">
                     <SponsorBanner />
@@ -119,21 +138,51 @@ export default function SettingsForm({
                             {t("book-settings")}
                         </div>
                         <div className="flex flex-col divide-y">
-                            <BookSettings />
-                            <PresetSettingsItem />
-                            <WidgetSettings />
-                            <UserSettingsItem />
-                            <DataManagerSettingsItem />
+                            <BookSettings
+                                onOpen={() => {
+                                    void showAccountingBooks("books").catch(
+                                        () => {},
+                                    );
+                                }}
+                            />
+                            <PendingBookFeature>
+                                <PresetSettingsItem />
+                            </PendingBookFeature>
+                            <PendingBookFeature>
+                                <WidgetSettings />
+                            </PendingBookFeature>
+                            <PendingBookFeature>
+                                <UserSettingsItem />
+                            </PendingBookFeature>
+                            <DataManagerSettingsItem
+                                onOpen={() => {
+                                    void showAccountingBooks("data").catch(
+                                        () => {},
+                                    );
+                                }}
+                            />
                         </div>
                     </div>
                     <div>
                         <div className="text-xs opacity-60 px-8">{t("ai")}</div>
                         <div className="flex flex-col divide-y">
-                            <AssistantSettingsItem />
-                            <ZenSettingsItem />
-                            <AgentApiSettingsItem />
-                            {showRelyr && <QuickEntrySettingsItem />}
-                            <VoiceSettingsItem />
+                            <PendingBookFeature>
+                                <AssistantSettingsItem />
+                            </PendingBookFeature>
+                            <PendingBookFeature>
+                                <ZenSettingsItem />
+                            </PendingBookFeature>
+                            <PendingBookFeature>
+                                <AgentApiSettingsItem />
+                            </PendingBookFeature>
+                            {showRelyr && (
+                                <PendingBookFeature>
+                                    <QuickEntrySettingsItem />
+                                </PendingBookFeature>
+                            )}
+                            <PendingBookFeature>
+                                <VoiceSettingsItem />
+                            </PendingBookFeature>
                         </div>
                     </div>
                     <div>
@@ -141,11 +190,16 @@ export default function SettingsForm({
                             {t("billing-functions")}
                         </div>
                         <div className="flex flex-col divide-y">
-                            <CategorySettingsItem />
+                            <AccountSettingsItem />
                             <TagSettingsItem />
-                            <Budget />
-                            <ScheduledSettingsItems />
+                            <PendingBookFeature>
+                                <Budget />
+                            </PendingBookFeature>
+                            <PendingBookFeature>
+                                <ScheduledSettingsItems />
+                            </PendingBookFeature>
                             <CurrencySettingsItem />
+                            <TimeZoneSettingsItem />
                         </div>
                     </div>
 

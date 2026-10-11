@@ -75,7 +75,7 @@ export const [ManualRateProvider, showManualRateUpdate] = createConfirmProvider<
     ManualRateEdit,
     number | null
 >(ManualRateForm, {
-    dialogTitle: "Manually update rate",
+    dialogTitle: "manually-update-rate",
     dialogModalClose: false,
     contentClassName: "w-[360px] h-fit max-w-[90vw]",
     fade: true,

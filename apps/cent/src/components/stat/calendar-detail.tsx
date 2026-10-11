@@ -1,10 +1,17 @@
-import dayjs from "dayjs";
+import type dayjs from "dayjs";
 import type { ReactNode } from "react";
 import { useMemo } from "react";
 import { useLocale } from "@/locale";
 import { cn } from "@/utils";
 import { collaboratorColors } from "@/utils/color";
 import { toThousand } from "@/utils/number";
+import { useBookTimeZone } from "../../hooks/use-time-zone";
+import {
+    addZonedDays,
+    bookDayjs,
+    parseZonedDateTime,
+    zonedDate,
+} from "../../utils/time";
 import type { EnvArg } from "../assistant/tools/env";
 import type { FocusType } from "./focus-type";
 
@@ -30,6 +37,7 @@ function BaseCalendarDetail({
     monthSlot,
 }: CalendarDetailProps) {
     const { locale } = useLocale();
+    const timeZone = useBookTimeZone();
 
     // 将语言代码映射到 Intl 格式 (zh -> zh-CN, en -> en-US)
     const intlLocale = locale === "zh" ? "zh-CN" : "en-US";
@@ -79,12 +87,12 @@ function BaseCalendarDetail({
 
     // 将 range 转换为 dayjs 对象
     const startDate = useMemo(
-        () => dayjs.unix((range?.[0] ?? Date.now()) / 1000),
-        [range],
+        () => zonedDate(range?.[0] ?? Date.now(), timeZone),
+        [range, timeZone],
     );
     const endDate = useMemo(
-        () => dayjs.unix((range?.[1] ?? Date.now()) / 1000),
-        [range],
+        () => zonedDate(range?.[1] ?? Date.now(), timeZone),
+        [range, timeZone],
     );
 
     // 周视图：一行7列，周一到周日
@@ -94,10 +102,15 @@ function BaseCalendarDetail({
         const weekStart = startDate.startOf("week");
         const days = [];
         for (let i = 0; i < 7; i++) {
-            days.push(weekStart.add(i, "day"));
+            days.push(
+                zonedDate(
+                    addZonedDays(weekStart.valueOf(), i, timeZone),
+                    timeZone,
+                ),
+            );
         }
         return days;
-    }, [viewType, startDate]);
+    }, [viewType, startDate, timeZone]);
 
     // 月视图：日历视图，显示该月的每一天
     const monthlyDays = useMemo(() => {
@@ -112,10 +125,13 @@ function BaseCalendarDetail({
         let current = firstDayOfWeek;
         while (current.isSameOrBefore(lastDayOfWeek)) {
             days.push(current);
-            current = current.add(1, "day");
+            current = zonedDate(
+                addZonedDays(current.valueOf(), 1, timeZone),
+                timeZone,
+            );
         }
         return days;
-    }, [viewType, startDate]);
+    }, [viewType, startDate, timeZone]);
 
     // 年视图：两行6列，显示每个月份
     const yearlyMonths = useMemo(() => {
@@ -123,10 +139,18 @@ function BaseCalendarDetail({
         const year = startDate.year();
         const months = [];
         for (let i = 0; i < 12; i++) {
-            months.push(dayjs().year(year).month(i).startOf("month"));
+            months.push(
+                zonedDate(
+                    parseZonedDateTime(
+                        `${year}-${String(i + 1).padStart(2, "0")}-01`,
+                        timeZone,
+                    ),
+                    timeZone,
+                ),
+            );
         }
         return months;
-    }, [viewType, startDate]);
+    }, [viewType, startDate, timeZone]);
 
     // 判断日期是否在 range 范围内
     const isInRange = (date: dayjs.Dayjs) => {
@@ -138,7 +162,7 @@ function BaseCalendarDetail({
 
     // 判断日期是否是今天
     const isToday = (date: dayjs.Dayjs) => {
-        return date.isSame(dayjs(), "day");
+        return date.isSame(bookDayjs(), "day");
     };
 
     // 周视图渲染
@@ -265,7 +289,7 @@ function BaseCalendarDetail({
         for (let i = 0; i < yearlyMonths.length; i += 6) {
             rows.push(yearlyMonths.slice(i, i + 6));
         }
-        const currentYear = dayjs().year();
+        const currentYear = bookDayjs().year();
 
         return (
             <div className="w-full">
@@ -286,7 +310,7 @@ function BaseCalendarDetail({
                                     "month",
                                 );
                             const isCurrentMonth = month.isSame(
-                                dayjs(),
+                                bookDayjs(),
                                 "month",
                             );
                             const isCurrentYear = month.year() === currentYear;
@@ -359,11 +383,15 @@ export default function CalendarDetail({
     dataset,
     dimension,
     focusType,
+    selectedColumn,
+    unsigned,
     ...props
 }: {
     dataset: DatasetSource;
     dimension: "category" | "user";
     focusType: FocusType;
+    selectedColumn?: number;
+    unsigned?: boolean;
 } & CalendarDetailProps) {
     // 解析 dataset，创建日期到数据的映射
     const dateDataMap = useMemo(() => {
@@ -437,6 +465,7 @@ export default function CalendarDetail({
             return v1;
         };
 
+        if (unsigned) return m(value);
         if (dimension === "category") {
             // category 维度：显示正负号
             if (index === 0) {
@@ -478,6 +507,11 @@ export default function CalendarDetail({
         return (
             <div className="p-0.5 space-y-0.5 max-w-full">
                 {data.map((value, index) => {
+                    if (
+                        selectedColumn !== undefined &&
+                        index !== selectedColumn
+                    )
+                        return null;
                     const columnName = columnNames[index] ?? `col-${index}`;
                     return (
                         <div
@@ -502,6 +536,11 @@ export default function CalendarDetail({
         return (
             <div className="p-0.5 space-y-0.5 max-w-full">
                 {data.map((value, index) => {
+                    if (
+                        selectedColumn !== undefined &&
+                        index !== selectedColumn
+                    )
+                        return null;
                     const columnName = columnNames[index] ?? `col-${index}`;
                     return (
                         <div

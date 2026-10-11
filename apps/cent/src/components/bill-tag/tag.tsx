@@ -3,8 +3,10 @@ import { Collapsible } from "radix-ui";
 import { useMemo } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
-import { useCurrency } from "@/hooks/use-currency";
+import { useStore } from "zustand";
+import { DefaultCurrencies } from "@/api/currency/currencies";
 import { useIntl } from "@/locale";
+import { accountingStore } from "@/store/accounting";
 import { Button } from "../ui/button";
 import {
     Form,
@@ -13,6 +15,7 @@ import {
     FormField,
     FormItem,
     FormLabel,
+    FormMessage,
 } from "../ui/form";
 import { Input } from "../ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger } from "../ui/select";
@@ -20,11 +23,15 @@ import type { BillTag } from "./type";
 
 const createFormSchema = (t: any) =>
     z.object({
-        name: z.string().check(
-            z.maxLength(50, {
-                message: t("max-name-length-limit", { n: 50 }),
-            }),
-        ),
+        name: z
+            .string()
+            .trim()
+            .min(1, { message: t("input-tag-name") })
+            .check(
+                z.maxLength(50, {
+                    message: t("max-name-length-limit", { n: 50 }),
+                }),
+            ),
         preferCurrency: z.optional(z.string()),
     });
 
@@ -40,11 +47,24 @@ export const EditTagForm = ({
     onCancel?: () => void;
 }) => {
     const t = useIntl();
-    const { quickCurrencies } = useCurrency();
+    const accounts = useStore(
+        accountingStore,
+        (state) => state.current?.data.accounts,
+    );
+    const quickCurrencies = [
+        ...new Set(
+            (accounts ?? [])
+                .filter((account) => !account.archived)
+                .map((account) => account.currency),
+        ),
+    ].map((id) => {
+        const currency = DefaultCurrencies.find((item) => item.id === id);
+        return { id, label: currency ? t(currency.labelKey) : id };
+    });
     const formSchema = useMemo(() => createFormSchema(t), [t]);
     const form = useForm<z.infer<typeof formSchema>>({
         resolver: zodResolver(formSchema) as any,
-        defaultValues: edit,
+        defaultValues: { name: "", ...edit },
     });
     const isCreate = edit === undefined;
 
@@ -71,6 +91,7 @@ export const EditTagForm = ({
                                     <FormControl>
                                         <Input {...field} maxLength={50} />
                                     </FormControl>
+                                    <FormMessage />
                                 </FormItem>
                             );
                         }}

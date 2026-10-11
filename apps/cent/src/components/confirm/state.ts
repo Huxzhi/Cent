@@ -9,6 +9,7 @@ const CONFIRM_DIALOG_BASE_Z = 4;
 type InstanceState<Value = any, Returned = any> = {
     visible: boolean;
     zIndex?: number;
+    modalBackdrop?: boolean;
     edit?: Value;
     controller?: {
         resolve: (val: Returned) => void;
@@ -31,7 +32,11 @@ type GlobalConfirmState = {
 
 type GlobalConfirmActions = {
     // 初始化或打开弹窗
-    open: <V, R>(id: string, value?: V) => [Promise<R>, () => void];
+    open: <V, R>(
+        id: string,
+        value?: V,
+        modalBackdrop?: boolean,
+    ) => [Promise<R>, () => void];
     // 更新指定 ID 的状态
     update: (id: string, partial: Partial<InstanceState>) => void;
     // 清理/移除实例（防止内存泄漏）
@@ -43,7 +48,7 @@ export const useGlobalConfirmStore = create<
 >()((set, get) => ({
     instances: {},
 
-    open: (id, value) => {
+    open: (id, value, modalBackdrop = false) => {
         const controller = get().instances[id]?.controller;
         if (controller) return [controller.promise, controller.cancel] as const;
 
@@ -80,6 +85,7 @@ export const useGlobalConfirmStore = create<
                 state.instances[id] = {
                     visible: true,
                     zIndex: CONFIRM_DIALOG_BASE_Z + visibleCount,
+                    modalBackdrop,
                     edit: value,
                     openId,
                     controller: {

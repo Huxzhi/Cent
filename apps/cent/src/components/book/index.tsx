@@ -52,13 +52,14 @@ export default function BookGuide() {
     );
 }
 
-export function BookSettings() {
+export function BookSettings({ onOpen }: { onOpen?: () => void } = {}) {
     const t = useIntl();
     return (
         <div className="backup">
             <Button
                 onClick={() => {
-                    showBookGuide();
+                    if (onOpen) onOpen();
+                    else void showBookGuide().catch(() => {});
                 }}
                 variant="ghost"
                 className="w-full py-4 rounded-none h-auto"

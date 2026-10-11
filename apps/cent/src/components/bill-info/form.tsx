@@ -14,8 +14,8 @@ import { useGuideStore } from "@/store/guide";
 import { type EditBill, useLedgerStore } from "@/store/ledger";
 import { useUserStore } from "@/store/user";
 import { formatTime } from "@/utils/time";
+import AccountIcon from "../accounting/account-icon";
 import { showBillEditor } from "../bill-editor";
-import CategoryIcon from "../category/icon";
 import SmartImage from "../image";
 import Money from "../money";
 import { Button } from "../ui/button";
@@ -26,6 +26,7 @@ import {
     DropdownMenuItem,
     DropdownMenuSeparator,
 } from "../ui/dropdown-menu";
+import BillInfoLayout from "./layout";
 
 export default function BillInfo({
     edit,
@@ -130,104 +131,33 @@ export default function BillInfo({
         ? scheduleds.find((v) => v.id === edit.extra?.scheduledId)
         : undefined;
     return (
-        <div>
-            <div className="min-h-[320px] p-4 flex flex-col w-full h-full">
-                <div className="flex-1 flex flex-col">
-                    {/* header */}
-                    <div className="flex items-center justify-between">
-                        <div className="flex items-center">
-                            <div className="w-12 h-12 flex-shrink-0 rounded-full bg-background border p-4 flex items-center justify-center">
-                                {categoryInfo?.icon && (
-                                    <CategoryIcon icon={categoryInfo?.icon} />
-                                )}
-                            </div>
-                            <div className="flex text-md font-semibold px-2">
-                                <div>{categoryInfo?.name ?? ""}</div>
-                            </div>
+        <BillInfoLayout
+            header={
+                <div className="flex items-center justify-between">
+                    <div className="flex items-center">
+                        <div className="w-12 h-12 flex-shrink-0 rounded-full bg-background border p-4 flex items-center justify-center">
+                            {categoryInfo?.icon && (
+                                <AccountIcon icon={categoryInfo?.icon} />
+                            )}
                         </div>
-                        <div
-                            className={`text-2xl font-bold flex overflow-x-auto ${
-                                edit.type === "expense"
-                                    ? "text-semantic-expense"
-                                    : "text-semantic-income"
-                            }`}
-                        >
-                            <div>{edit.type === "expense" ? "-" : "+"}</div>
-                            <Money
-                                value={amountToNumber(edit.amount)}
-                                accurate
-                            />
+                        <div className="flex text-md font-semibold px-2">
+                            <div>{categoryInfo?.name ?? ""}</div>
                         </div>
                     </div>
-
-                    <div className="w-full border border-dashed my-2"></div>
-
-                    {/* details */}
-                    <div className="text-gray-500">
-                        <div className="flex justify-between items-center my-1 gap-2">
-                            <div>{t("comment")}:</div>
-                            <div className="flex-1 overflow-x-auto text-right">
-                                {edit.comment}
-                            </div>
-                        </div>
-                        <div className="flex justify-between items-center my-1 gap-2">
-                            <div>{t("creator")}:</div>
-                            <div>{isMe ? t("me") : name}</div>
-                        </div>
-                        <div className="flex justify-between items-center my-1 gap-2">
-                            <div>{t("time")}:</div>
-                            <div>{formatTime(edit.time)}</div>
-                        </div>
-                        {currency !== undefined && (
-                            <div className="flex justify-between items-center my-1 gap-2">
-                                <div>{t("currency")}:</div>
-                                <div>
-                                    {currency.symbol}
-                                    {amountToNumber(edit.currency!.amount)}{" "}
-                                    {currency.label}
-                                </div>
-                            </div>
-                        )}
-                        {edit.location && (
-                            <div className="flex justify-between items-center my-1 gap-2">
-                                <div>{t("location")}:</div>
-                                <div>{`(${edit.location.latitude.toFixed(4)},${edit.location.longitude.toFixed(4)})`}</div>
-                            </div>
-                        )}
-                        {(tags?.length ?? 0) > 0 && (
-                            <div className="flex justify-between items-start my-1">
-                                <div>{t("tags")}:</div>
-                                <div className="flex flex-wrap gap-1 justify-end max-w-[80%]">
-                                    {tags?.map((t) => (
-                                        <span key={t.id}>#{t.name}</span>
-                                    ))}
-                                </div>
-                            </div>
-                        )}
+                    <div
+                        className={`text-2xl font-bold flex overflow-x-auto ${
+                            edit.type === "expense"
+                                ? "text-semantic-expense"
+                                : "text-semantic-income"
+                        }`}
+                    >
+                        <div>{edit.type === "expense" ? "-" : "+"}</div>
+                        <Money value={amountToNumber(edit.amount)} accurate />
                     </div>
-
-                    {edit.images && (
-                        <div className="flex-1 py-2 flex gap-2 items-center justify-center max-w-full overflow-x-auto hidden-scrollbar">
-                            {edit.images.map((img, i) => (
-                                <SmartImage
-                                    key={i}
-                                    source={img}
-                                    alt=""
-                                    className="max-h-[200px] object-cover rounded min-w-24 min-h-24 data-[state=loading]:animate-pulse bg-primary/10"
-                                />
-                            ))}
-                        </div>
-                    )}
-
-                    {edit.extra?.scheduledId && (
-                        <div className="text-xs opacity-60 text-right">
-                            {t("from-scheduled")} {schedule?.title}
-                        </div>
-                    )}
                 </div>
-
-                {/* footer */}
-                <div className="footer flex justify-between items-center">
+            }
+            footer={
+                <>
                     <div className="flex">
                         {canEdit && (
                             <MoreAction
@@ -255,9 +185,72 @@ export default function BillInfo({
                             </button>
                         )}
                     </div>
+                </>
+            }
+        >
+            {/* details */}
+            <div className="text-gray-500">
+                <div className="flex justify-between items-center my-1 gap-2">
+                    <div>{t("comment")}:</div>
+                    <div className="flex-1 overflow-x-auto text-right">
+                        {edit.comment}
+                    </div>
                 </div>
+                <div className="flex justify-between items-center my-1 gap-2">
+                    <div>{t("creator")}:</div>
+                    <div>{isMe ? t("me") : name || t("me")}</div>
+                </div>
+                <div className="flex justify-between items-center my-1 gap-2">
+                    <div>{t("time")}:</div>
+                    <div>{formatTime(edit.time)}</div>
+                </div>
+                {currency !== undefined && (
+                    <div className="flex justify-between items-center my-1 gap-2">
+                        <div>{t("currency")}:</div>
+                        <div>
+                            {currency.symbol}
+                            {amountToNumber(edit.currency!.amount)}{" "}
+                            {currency.label}
+                        </div>
+                    </div>
+                )}
+                {edit.location && (
+                    <div className="flex justify-between items-center my-1 gap-2">
+                        <div>{t("location")}:</div>
+                        <div>{`(${edit.location.latitude.toFixed(4)},${edit.location.longitude.toFixed(4)})`}</div>
+                    </div>
+                )}
+                {(tags?.length ?? 0) > 0 && (
+                    <div className="flex justify-between items-start my-1">
+                        <div>{t("tags")}:</div>
+                        <div className="flex flex-wrap gap-1 justify-end max-w-[80%]">
+                            {tags?.map((t) => (
+                                <span key={t.id}>#{t.name}</span>
+                            ))}
+                        </div>
+                    </div>
+                )}
             </div>
-        </div>
+
+            {edit.images && (
+                <div className="flex-1 py-2 flex gap-2 items-center justify-center max-w-full overflow-x-auto hidden-scrollbar">
+                    {edit.images.map((img, i) => (
+                        <SmartImage
+                            key={i}
+                            source={img}
+                            alt=""
+                            className="max-h-[200px] object-cover rounded min-w-24 min-h-24 data-[state=loading]:animate-pulse bg-primary/10"
+                        />
+                    ))}
+                </div>
+            )}
+
+            {edit.extra?.scheduledId && (
+                <div className="text-xs opacity-60 text-right">
+                    {t("from-scheduled")} {schedule?.title}
+                </div>
+            )}
+        </BillInfoLayout>
     );
 }
 

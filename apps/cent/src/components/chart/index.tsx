@@ -2,6 +2,7 @@ import type {
     // 系列类型的定义后缀都为 SeriesOption
     BarSeriesOption,
     LineSeriesOption,
+    PieSeriesOption,
 } from "echarts/charts";
 import { BarChart, LineChart, PieChart } from "echarts/charts";
 import type {
@@ -25,7 +26,15 @@ import type { ComposeOption } from "echarts/core";
 import * as echarts from "echarts/core";
 import { LabelLayout, UniversalTransition } from "echarts/features";
 import { CanvasRenderer } from "echarts/renderers";
-import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
+import {
+    forwardRef,
+    useCallback,
+    useEffect,
+    useImperativeHandle,
+    useLayoutEffect,
+    useRef,
+    useState,
+} from "react";
 import useResize from "@/hooks/use-resize";
 import { cn } from "@/utils";
 
@@ -33,6 +42,7 @@ import { cn } from "@/utils";
 export type ECOption = ComposeOption<
     | BarSeriesOption
     | LineSeriesOption
+    | PieSeriesOption
     | TitleComponentOption
     | TooltipComponentOption
     | GridComponentOption
@@ -67,34 +77,43 @@ const Chart = forwardRef<ChartInstance | undefined, ChartProps>(function _Chart(
     { className, option, onClick }: ChartProps,
     ref,
 ) {
-    const rootRef = useRef<HTMLDivElement>(null);
+    const [element, setElement] = useState<HTMLDivElement | null>(null);
     const chartRef = useRef<ChartInstance>(undefined);
-    useImperativeHandle(ref, () => chartRef.current);
-    useEffect(() => {
-        const el = rootRef.current;
+    useLayoutEffect(() => {
+        const el = element;
         if (!el) {
             return;
         }
         const chart = echarts.init(el);
         chartRef.current = chart;
-        chart.on("click", onClick as any);
         return () => {
-            chart.off("click", onClick as any);
             chart.dispose();
+            chartRef.current = undefined;
         };
-    }, [onClick]);
-
-    useResize(rootRef.current, (sizer) => {
-        chartRef?.current?.resize(sizer());
-    });
+    }, [element]);
+    useImperativeHandle(ref, () => chartRef.current);
 
     useEffect(() => {
-        if (!chartRef.current) {
+        const chart = chartRef.current;
+        if (!element || !chart || !onClick) return;
+        chart.on("click", onClick);
+        return () => {
+            chart.off("click", onClick);
+        };
+    }, [element, onClick]);
+
+    const resize = useCallback<Parameters<typeof useResize>[1]>((sizer) => {
+        chartRef?.current?.resize(sizer());
+    }, []);
+    useResize(element, resize);
+
+    useEffect(() => {
+        if (!element || !chartRef.current) {
             return;
         }
         chartRef.current.setOption(option);
-    }, [option]);
-    return <div ref={rootRef} className={cn(className)}></div>;
+    }, [element, option]);
+    return <div ref={setElement} className={cn(className)}></div>;
 });
 
 export default Chart;

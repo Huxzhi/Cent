@@ -14,6 +14,8 @@
 		"build:chaty": "pnpm --filter @glink25/chaty build",
 		"build:zen": "pnpm --filter @glink25/zen build",
 		"lint": "pnpm -r lint",
+		"typecheck": "pnpm --filter cent typecheck",
+		"test": "pnpm -r --if-present test",
 		"pre-commit": "pnpm -r lint",
 		"prepare": "husky"
 	},

@@ -89,7 +89,7 @@ export const useUserStore = create<UserStore>()(
                 }
             };
 
-            updateUserInfo();
+            void updateUserInfo().catch(() => {});
 
             const getUserInfo = async (login: string) => {
                 const run = async () => {

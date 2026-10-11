@@ -258,22 +258,12 @@ export default function BillFilterForm({
             </div>
             {/* comment */}
             {showComment && (
-                <div className="w-full flex justify-between items-center">
-                    <div className="flex items-center gap-1">
-                        <i className="icon-[mdi--comment-processing-outline]"></i>
-                        {t("comment")}:
-                    </div>
-                    <div>
-                        <Input
-                            className="text-right"
-                            value={form.comment ?? ""}
-                            onChange={(e) => {
-                                const value = e.target.value;
-                                setForm((v) => ({ ...v, comment: value }));
-                            }}
-                        />
-                    </div>
-                </div>
+                <CommentInput
+                    value={form.comment}
+                    onChange={(comment) =>
+                        setForm((value) => ({ ...value, comment }))
+                    }
+                />
             )}
             {/* type selector */}
             <div className="w-full flex justify-between items-center">
@@ -596,14 +586,42 @@ export default function BillFilterForm({
     );
 }
 
-function RangeInput({
+export function CommentInput({
+    value,
+    onChange,
+}: {
+    value?: string;
+    onChange: (value: string) => void;
+}) {
+    const t = useIntl();
+    return (
+        <div className="w-full flex justify-between items-center gap-2">
+            <div className="flex items-center gap-1 shrink-0">
+                <i className="icon-[mdi--comment-processing-outline]" />
+                {t("comment")}:
+            </div>
+            <div className="min-w-0">
+                <Input
+                    aria-label={t("comment")}
+                    className="text-right"
+                    value={value ?? ""}
+                    onChange={(event) => onChange(event.target.value)}
+                />
+            </div>
+        </div>
+    );
+}
+
+export function RangeInput({
     value,
     onChange,
     onBlur,
+    label,
 }: {
     value: number | undefined;
     onChange?: (v?: number) => void;
     onBlur?: () => void;
+    label?: string;
 }) {
     const t = useIntl();
     return (
@@ -619,10 +637,15 @@ function RangeInput({
             )}
             <input
                 type="number"
+                aria-label={label}
                 className="max-w-[64px] h-[18px] bg-transparent outline-none text-right"
                 value={value ?? ""}
                 onChange={(e) => {
-                    onChange?.(Number(e.target.value));
+                    onChange?.(
+                        e.target.value === ""
+                            ? undefined
+                            : Number(e.target.value),
+                    );
                 }}
                 onBlur={onBlur}
             ></input>

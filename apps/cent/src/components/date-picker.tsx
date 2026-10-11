@@ -1,9 +1,9 @@
-import dayjs, { type Dayjs } from "dayjs";
+import type { Dayjs } from "dayjs";
 import { ChevronDownIcon } from "lucide-react";
 import type React from "react";
 import { type ReactNode, useState } from "react";
 import { useIntl } from "@/locale";
-import { denseDate } from "@/utils/time";
+import { bookDayjs, denseDate, parseBookDateTime } from "@/utils/time";
 import { Calendar } from "./ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 
@@ -21,19 +21,21 @@ type Props = {
 
 const Hours = Array.from({ length: 24 }, (_, i) => ({
     label: `${i}`.padStart(2, "0"),
-    value: `${i}`,
+    value: `${i}`.padStart(2, "0"),
 }));
 const Minutes = Array.from({ length: 60 }, (_, i) => ({
     label: `${i}`.padStart(2, "0"),
-    value: `${i}`,
+    value: `${i}`.padStart(2, "0"),
 }));
 
 function NativeSelect({
     children,
     value,
     options,
+    label,
     onValueChange,
 }: {
+    label: string;
     options: { label: string; value: string }[];
     value: string;
     children?: ReactNode;
@@ -43,7 +45,7 @@ function NativeSelect({
         <span className="has-focus:border-ring border-input shadow-xs has-focus:ring-ring/50 has-focus:ring-[3px] relative rounded-md border rdp-dropdown_root">
             <select
                 className="bg-popover absolute inset-0 opacity-0 rdp-dropdown rdp-hours_dropdown"
-                aria-label="Choose the Hour"
+                aria-label={label}
                 value={value}
                 onChange={(e) => {
                     onValueChange?.(e.currentTarget.value);
@@ -78,6 +80,15 @@ export function DatePicker({
     const t = useIntl();
 
     const [open, setOpen] = useState(false);
+    const [dateError, setDateError] = useState(false);
+    const emitDate = (value: string) => {
+        try {
+            onChange?.(parseBookDateTime(value));
+            setDateError(false);
+        } catch {
+            setDateError(true);
+        }
+    };
 
     // display 格式化函数
     const display =
@@ -85,7 +96,7 @@ export function DatePicker({
             ? displayFormatter
             : (d?: Dayjs) => d?.format(displayFormatter as string);
 
-    const current = value ? dayjs(value as any) : dayjs();
+    const current = bookDayjs(value ?? Date.now());
     return (
         <Popover
             open={open}
@@ -100,7 +111,7 @@ export function DatePicker({
                 <div className="flex justify-center items-center relative cursor-pointer">
                     {children}
                     <div className="mx-2">
-                        {display(value ? current : undefined)}
+                        {display(value === undefined ? undefined : current)}
                     </div>
                 </div>
             </PopoverTrigger>
@@ -114,15 +125,36 @@ export function DatePicker({
                     mode="single"
                     captionLayout="dropdown"
                     className="rounded-md p-0"
-                    selected={current.toDate()}
+                    selected={
+                        new Date(
+                            current.year(),
+                            current.month(),
+                            current.date(),
+                        )
+                    }
+                    defaultMonth={
+                        new Date(
+                            current.year(),
+                            current.month(),
+                            current.date(),
+                        )
+                    }
+                    today={
+                        new Date(
+                            bookDayjs().year(),
+                            bookDayjs().month(),
+                            bookDayjs().date(),
+                        )
+                    }
                     onSelect={(v) => {
                         if (v) {
                             const x = new Date(v);
-                            if (fixedTime) {
-                                x.setHours(current.hour());
-                                x.setMinutes(current.minute());
-                            }
-                            onChange?.(x.getTime());
+                            const date = `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, "0")}-${String(x.getDate()).padStart(2, "0")}`;
+                            emitDate(
+                                fixedTime
+                                    ? `${date}T${current.format("HH:mm")}`
+                                    : date,
+                            );
                         }
                     }}
                 />
@@ -131,23 +163,30 @@ export function DatePicker({
                     <div className="flex gap-2 items-center">
                         <NativeSelect
                             value={current.format("HH")}
+                            label={t("accounting-choose-hour")}
                             options={Hours}
                             onValueChange={(v) => {
                                 const newValue = current.hour(Number(v));
-                                onChange?.(newValue.unix() * 1000);
+                                emitDate(newValue.format("YYYY-MM-DDTHH:mm"));
                             }}
                         />
                         <span>:</span>
                         <NativeSelect
                             value={current.format("mm")}
+                            label={t("accounting-choose-minute")}
                             options={Minutes}
                             onValueChange={(v) => {
                                 const newValue = current.minute(Number(v));
-                                onChange?.(newValue.unix() * 1000);
+                                emitDate(newValue.format("YYYY-MM-DDTHH:mm"));
                             }}
                         />
                     </div>
                 </div>
+                {dateError && (
+                    <p role="alert" className="text-xs text-destructive">
+                        {t("accounting-time-zone-invalid-time")}
+                    </p>
+                )}
             </PopoverContent>
         </Popover>
     );

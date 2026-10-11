@@ -2,13 +2,11 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { useMemo } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
-import { useCurrency } from "@/hooks/use-currency";
 import type { CustomCurrency } from "@/ledger/type";
 import { useIntl } from "@/locale";
 import { Button } from "../ui/button";
 import { Form, FormControl, FormField, FormItem, FormLabel } from "../ui/form";
 import { Input } from "../ui/input";
-import RateInput from "./rate-input";
 
 const createFormSchema = (t: any) =>
     z.object({
@@ -23,9 +21,6 @@ const createFormSchema = (t: any) =>
                 message: t("max-name-length-limit", { n: 5 }),
             }),
         ),
-        rateToBase: z.coerce
-            .number()
-            .check(z.gte(0, { message: t("rate-must-positive") })),
     });
 
 type CurrencyEdit = Omit<CustomCurrency, "id"> & { id?: string };
@@ -40,17 +35,20 @@ export const EditCurrencyForm = ({
     onCancel?: () => void;
 }) => {
     const t = useIntl();
-    const { baseCurrency } = useCurrency();
     const formSchema = useMemo(() => createFormSchema(t), [t]);
     const form = useForm<z.infer<typeof formSchema>>({
         resolver: zodResolver(formSchema) as any,
-        defaultValues: edit,
+        defaultValues: edit ?? { name: "", symbol: "" },
     });
     const isCreate = edit === undefined;
 
     const toSubmit = () => {
         const onSubmit = (data: z.infer<typeof formSchema>) => {
-            onConfirm?.({ ...data, id: edit?.id });
+            onConfirm?.({
+                ...data,
+                id: edit?.id,
+                rateToBase: edit?.rateToBase ?? 1,
+            });
         };
         form.handleSubmit(onSubmit)();
     };
@@ -105,34 +103,9 @@ export const EditCurrencyForm = ({
                         }}
                     ></FormField>
 
-                    <FormField
-                        control={form.control}
-                        name="rateToBase"
-                        render={({ field }) => (
-                            <FormItem className="space-y-3">
-                                {/* 这里的 FormLabel 可以保留，或者直接使用组件内部的 label */}
-                                <FormLabel>{t("rate-to-base")}</FormLabel>
-                                <FormControl>
-                                    <RateInput
-                                        // 基础货币标签（本位币）
-                                        baseCurrencyLabel={baseCurrency.label}
-                                        // 目标货币标签（当前编辑的币种）
-                                        targetCurrencyLabel={
-                                            form.watch("name") ||
-                                            t("default-currency-name")
-                                        }
-                                        // 传入 Hook Form 的当前值
-                                        value={field.value}
-                                        allowClear={false}
-                                        // 当 RateInput 内部计算出新汇率时，直接更新 Hook Form
-                                        onChange={(newRate) =>
-                                            field.onChange(newRate)
-                                        }
-                                    />
-                                </FormControl>
-                            </FormItem>
-                        )}
-                    />
+                    <p className="text-xs opacity-60">
+                        {t("accounting-derived-rates-help")}
+                    </p>
                 </div>
                 <div className="flex justify-between items-center px-4">
                     <div>

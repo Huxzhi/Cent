@@ -1,230 +1,188 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo } from "react";
 import { v4 } from "uuid";
-import { useShallow } from "zustand/shallow";
+import { useStore } from "zustand";
+import { DefaultCurrencies } from "@/api/currency/currencies";
+import { getAccountLabelKey } from "@/components/accounting/account-label";
 import {
-    DefaultCurrencies,
-    DefaultCurrencyId,
-} from "@/api/currency/currencies";
+    type CurrencySettings,
+    defaultCurrencySettings,
+    isMultiCurrencyEnabled,
+    setQuickCurrencies,
+} from "@/ledger/accounting/currency-settings";
+import {
+    deriveExchangeRates,
+    exchangeValueRate,
+} from "@/ledger/accounting/exchange-rates";
 import type { CustomCurrency } from "@/ledger/type";
 import { t, useIntl } from "@/locale";
-import { measure } from "@/measurement";
-import { useBookStore } from "@/store/book";
-import { type CConvert, useCurrencyStore } from "@/store/currency";
-import { useLedgerStore } from "@/store/ledger";
-import { useUserStore } from "@/store/user";
+import { accountingStore } from "@/store/accounting";
+import type { CConvert } from "@/store/currency";
+import { useAccountingView } from "./use-accounting-view";
 
+/** 汇率完全来自当前账本换汇分录，不查询行情或使用旧报价缓存。 */
 export const useCurrency = () => {
-    const [baseCurrencyId, customCurrencies = [], quickCurrencyIds = []] =
-        useLedgerStore(
-            useShallow((state) => [
-                state.infos?.meta.baseCurrency ?? DefaultCurrencyId,
-                state.infos?.meta.customCurrencies,
-                state.infos?.meta.quickCurrencies,
-            ]),
-        );
-
-    const t = useIntl();
+    const settings = useStore(
+        accountingStore,
+        (s) => s.current?.data.currencySettings ?? defaultCurrencySettings,
+    );
+    const bookId = useStore(accountingStore, (s) => s.current?.book.id);
+    const data = useStore(accountingStore, (s) => s.current?.data);
+    const view = useAccountingView(data);
+    const intl = useIntl();
     const allCurrencies = useMemo(
         () => [
-            ...customCurrencies.map((c) => ({ ...c, label: c.name })),
-            ...DefaultCurrencies.map((c) => ({ ...c, label: t(c.labelKey) })),
+            ...settings.customCurrencies.map((c) => {
+                const account = data?.accounts.find(
+                    (account) =>
+                        account.id === c.accountId && account.name === c.name,
+                );
+                const key = account && getAccountLabelKey(account);
+                return { ...c, label: key ? intl(key) : c.name };
+            }),
+            ...DefaultCurrencies.map((c) => ({
+                ...c,
+                label: intl(c.labelKey),
+            })),
         ],
-        [customCurrencies, t],
+        [settings.customCurrencies, data?.accounts, intl],
     );
-
-    const baseCurrency = allCurrencies.find((c) => c.id === baseCurrencyId)!;
-
-    const setBaseCurrency = useCallback(async (newCurrencyId: string) => {
-        const book = useBookStore.getState().currentBookId;
-        if (!book) {
-            return;
-        }
-        await useLedgerStore.getState().updateGlobalMeta((prev) => {
-            prev.baseCurrency = newCurrencyId;
-            // 切换本位币时，会将自定义汇率进行清空
-            const uid = useUserStore.getState().id;
-            if (prev.personal?.[uid]) {
-                prev.personal[uid].rates = undefined;
-            }
-            return prev;
-        });
-    }, []);
-
-    // 用于手动触发React更新
-    const [flag, setFlag] = useState(false);
-    const setRate = useCallback(
-        async (target: string, rate: number | undefined) => {
-            if (rate && rate <= 0) {
-                throw new Error("rate must larger than 0");
-            }
-            await useLedgerStore.getState().updatePersonalMeta((prev) => {
-                // TODO: 使用更简洁的函数代替
-                const entries = [
-                    ...Object.entries(prev.rates ?? {}).filter(
-                        ([k]) => k !== target,
+    const baseCurrency = allCurrencies.find(
+        (c) => c.id === settings.baseCurrency,
+    ) ?? {
+        id: settings.baseCurrency,
+        label: settings.baseCurrency,
+        name: settings.baseCurrency,
+        symbol: settings.baseCurrency,
+        rateToBase: 1,
+    };
+    const exchangeRates = useMemo(
+        () =>
+            deriveExchangeRates(
+                data?.accounts ?? [],
+                view.transactions,
+                settings.baseCurrency,
+            ),
+        [data?.accounts, view.transactions, settings.baseCurrency],
+    );
+    const update = useCallback(
+        async (transform: (previous: CurrencySettings) => CurrencySettings) => {
+            await accountingStore.getState().updateData((data) => {
+                if (accountingStore.getState().current?.book.id !== bookId)
+                    throw new Error("Book changed; reopen currency settings");
+                return {
+                    ...data,
+                    currencySettings: transform(
+                        data.currencySettings ?? defaultCurrencySettings,
                     ),
-                    [target, rate],
-                ].filter(([, v]) => v !== undefined);
-                prev.rates =
-                    entries.length === 0
-                        ? undefined
-                        : Object.fromEntries(entries);
-                return prev;
-            });
-            setFlag((v) => !v);
+                };
+            }, Date.now());
         },
-        [],
+        [bookId],
     );
-
     const convert: CConvert = useCallback(
-        (money, target, base, date) => {
-            // 自定义币种使用固定汇率
-            const custom = customCurrencies.find((v) => v.id === target);
-            if (custom) {
-                const v = money / custom.rateToBase;
-                return {
-                    predict: v,
-                    accurate: true,
-                    finished: Promise.resolve(v),
-                };
-            }
-            // 优先通过自定义汇率
-            const uid = useUserStore.getState().id;
-            const customRates =
-                useLedgerStore.getState().infos?.meta.personal?.[uid]?.rates;
-            const customRate = (() => {
-                if (customRates?.[target]) {
-                    return customRates[target];
-                }
-                if (customRates?.[base]) {
-                    return 1 / customRates?.[base];
-                }
-            })();
-            if (customRate) {
-                const value = money / customRate;
-                return {
-                    predict: value,
-                    accurate: true,
-                    finished: Promise.resolve(value),
-                };
-            }
-            if (flag) {
-                //nothing
-            }
-            const rawConvert = useCurrencyStore.getState().convert;
-            return rawConvert(money, target, base, date);
+        (money, target, base) => {
+            const rate = exchangeValueRate(exchangeRates, target, base);
+            const value = rate === undefined ? Number.NaN : money * rate;
+            return {
+                predict: value,
+                accurate: rate !== undefined,
+                finished: Promise.resolve(value),
+            };
         },
-        [flag, customCurrencies],
+        [exchangeRates],
     );
-
-    const refresh = useCallback(async () => {
-        return useCurrencyStore
-            .getState()
-            .refresh()
-            .finally(() => {
-                setFlag((v) => !v);
-            });
-    }, []);
-
+    const setBaseCurrency = useCallback(
+        async (id: string) => {
+            if (id === settings.baseCurrency) return;
+            await update((previous) => ({ ...previous, baseCurrency: id }));
+        },
+        [settings.baseCurrency, update],
+    );
     const updateCustomCurrency = useCallback(
         (currency: Omit<CustomCurrency, "id"> & { id?: string }) => {
             const id = currency.id ?? v4();
-            const exists = useLedgerStore
-                .getState()
-                .infos?.meta.customCurrencies?.some((item) => item.id === id);
-            const result = useLedgerStore
-                .getState()
-                .updateGlobalMeta((meta) => {
-                    const customCurrencies = meta.customCurrencies ?? [];
-                    const index = customCurrencies.findIndex(
-                        (c) => c.id === id,
-                    );
-                    if (index === -1) {
-                        customCurrencies.push({ ...currency, id });
-                    } else {
-                        customCurrencies[index] = { ...currency, id };
-                    }
-                    return { ...meta, customCurrencies };
-                });
-            void result.then(
-                () =>
-                    measure("feature_config_changed", {
-                        feature: "custom_currency",
-                        action: exists ? "update" : "create",
-                    }),
-                () => undefined,
-            );
-            return result;
+            if (DefaultCurrencies.some((c) => c.id === id))
+                return Promise.reject(new Error("Reserved currency ID"));
+            return update((previous) => ({
+                ...previous,
+                customCurrencies: [
+                    ...previous.customCurrencies.filter((c) => c.id !== id),
+                    {
+                        ...previous.customCurrencies.find(
+                            (item) => item.id === id,
+                        ),
+                        ...currency,
+                        id,
+                    },
+                ],
+            }));
         },
-        [],
+        [update],
     );
-
-    const deleteCustomCurrency = useCallback((id: string) => {
-        const result = useLedgerStore.getState().updateGlobalMeta((meta) => {
-            const customCurrencies = meta.customCurrencies ?? [];
-            const index = customCurrencies.findIndex((c) => c.id === id);
-            customCurrencies.splice(index, 1);
-            return { ...meta, customCurrencies };
-        });
-        void result.then(
-            () =>
-                measure("feature_config_changed", {
-                    feature: "custom_currency",
-                    action: "delete",
-                }),
-            () => undefined,
-        );
-        return result;
-    }, []);
-
+    const deleteCustomCurrency = useCallback(
+        (id: string) =>
+            update((previous) => {
+                if (
+                    previous.baseCurrency === id ||
+                    accountingStore
+                        .getState()
+                        .current?.data.accounts.some((a) => a.currency === id)
+                )
+                    throw new Error(intl("accounting-currency-used"));
+                const rates = { ...previous.rates };
+                delete rates[id];
+                return {
+                    ...previous,
+                    customCurrencies: previous.customCurrencies.filter(
+                        (c) => c.id !== id,
+                    ),
+                    quickCurrencies: previous.quickCurrencies.filter(
+                        (c) => c !== id,
+                    ),
+                    rates,
+                };
+            }),
+        [update, intl],
+    );
     const quickCurrencies = useMemo(
         () =>
-            quickCurrencyIds
-                .map((id) => {
-                    return allCurrencies.find((v) => v.id === id);
-                })
-                .filter((v) => v !== undefined),
-        [quickCurrencyIds, allCurrencies],
+            settings.quickCurrencies
+                .map((id) => allCurrencies.find((c) => c.id === id))
+                .filter((c) => c !== undefined),
+        [settings.quickCurrencies, allCurrencies],
     );
-    const updateQuickCurrencies = useCallback((list: string[]) => {
-        return useLedgerStore.getState().updateGlobalMeta((meta) => {
-            return { ...meta, quickCurrencies: list };
-        });
-    }, []);
-
+    const updateQuickCurrencies = useCallback(
+        (ids: string[]) =>
+            update((previous) => setQuickCurrencies(previous, ids)),
+        [update],
+    );
     return {
+        multiCurrency: isMultiCurrencyEnabled(settings, data?.accounts),
         baseCurrency,
         setBaseCurrency,
         convert,
-        setRate,
-        refresh,
-
-        customCurrencies,
+        customCurrencies: settings.customCurrencies,
         updateCustomCurrency,
         deleteCustomCurrency,
-
         allCurrencies,
         quickCurrencies,
         updateQuickCurrencies,
     };
 };
 
-export const getAllCurrencies = () => {
-    const customCurrencies =
-        useLedgerStore.getState().infos?.meta.customCurrencies ?? [];
-    return [
-        ...customCurrencies.map((c) => ({ ...c, label: c.name })),
-        ...DefaultCurrencies.map((c) => ({ ...c, label: t(c.labelKey) })),
-    ];
-};
-
+export const getAllCurrencies = () => [
+    ...(
+        accountingStore.getState().current?.data.currencySettings
+            ?.customCurrencies ?? []
+    ).map((c) => ({ ...c, label: c.name })),
+    ...DefaultCurrencies.map((c) => ({ ...c, label: t(c.labelKey) })),
+];
 export const getQuickCurrencies = () => {
-    const allCurrencies = getAllCurrencies();
-    const quickCurrencyIds =
-        useLedgerStore.getState().infos?.meta.quickCurrencies ?? [];
-    return quickCurrencyIds
-        .map((id) => {
-            return allCurrencies.find((v) => v.id === id);
-        })
-        .filter((v) => v !== undefined);
+    const all = getAllCurrencies();
+    return (
+        accountingStore.getState().current?.data.currencySettings
+            ?.quickCurrencies ?? []
+    )
+        .map((id) => all.find((c) => c.id === id))
+        .filter((c) => c !== undefined);
 };

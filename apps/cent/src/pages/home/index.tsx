@@ -1,289 +1,113 @@
-import dayjs from "dayjs";
-import "@/zen/overview.css";
+import { useState } from "react";
+import { useStore } from "zustand";
+import { showAccountingBooks } from "../../components/accounting/book-manager";
+import { FormError, money } from "../../components/accounting/shared";
+import { DatePicker } from "../../components/date-picker";
+import TransactionList from "../../components/ledger/transaction-list";
+import { useAccountingView } from "../../hooks/use-accounting-view";
+import { useCurrency } from "../../hooks/use-currency";
 import {
-    useCallback,
-    useEffect,
-    useLayoutEffect,
-    useMemo,
-    useRef,
-    useState,
-} from "react";
-import { useShallow } from "zustand/shallow";
-import { StorageAPI } from "@/api/storage";
-import CloudLoopIcon from "@/assets/icons/cloud-loop.svg?react";
-import AnimatedNumber from "@/components/animated-number";
-import { showBookGuide } from "@/components/book/util";
-import BudgetCard from "@/components/budget/card";
-import { HintTooltip } from "@/components/hint";
-import { PaginationIndicator } from "@/components/indicator";
-import Ledger from "@/components/ledger";
-import Loading from "@/components/loading";
-import { Promotion } from "@/components/promotion";
-import WidgetPreview from "@/components/widget/preview";
-import { useBudget } from "@/hooks/use-budget";
-import { useSnap } from "@/hooks/use-snap";
-import { useWidget } from "@/hooks/use-widget";
-import { useZenOverview } from "@/hooks/use-zen";
-import { amountToNumber } from "@/ledger/bill";
-import { useIntl } from "@/locale";
-import { useBookStore } from "@/store/book";
-import { useLedgerStore } from "@/store/ledger";
-import { usePreferenceStore } from "@/store/preference";
-import { useUserStore } from "@/store/user";
-import { cn } from "@/utils";
-import { filterOrderedBillListByTimeRange } from "@/utils/filter";
-import { denseDate } from "@/utils/time";
-
-let ledgerAnimationShows = false;
+    getStatisticsLines,
+    getStatisticsTotals,
+} from "../../ledger/accounting/statistics";
+import { useIntl } from "../../locale";
+import { accountingStore } from "../../store/accounting";
+import { bookDayjs } from "../../utils/time";
 
 export default function Page() {
+    const { current, busy, error } = useStore(accountingStore);
+    const [date, setDate] = useState(Date.now());
+    const { baseCurrency, convert } = useCurrency();
     const t = useIntl();
-
-    const { bills, loading, sync } = useLedgerStore();
-    const currentBook = useBookStore(
-        useShallow((state) => {
-            const { currentBookId, books } = state;
-            return books.find((b) => b.id === currentBookId);
-        }),
-    );
-    const showAssets = usePreferenceStore(
-        useShallow((state) => state.showAssetsInLedger),
-    );
-    const { id: userId } = useUserStore();
-    const syncIconClassName =
-        sync === "wait"
-            ? "icon-[mdi--cloud-minus-outline]"
-            : sync === "syncing"
-              ? "icon-[line-md--cloud-alt-print-loop]"
-              : sync === "success"
-                ? "icon-[mdi--cloud-check-outline]"
-                : "icon-[mdi--cloud-remove-outline] text-red-600";
-
-    const [currentDate, setCurrentDate] = useState(dayjs());
-    const zenOverview = useZenOverview();
-    const showZenOverview = zenOverview.ready;
-    const ledgerRef = useRef<any>(null);
-
-    const currentDateBills = useMemo(() => {
-        const today = filterOrderedBillListByTimeRange(bills, [
-            currentDate.startOf("day"),
-            currentDate.endOf("day"),
-        ]);
-        return today;
-    }, [bills, currentDate]);
-
-    const currentDateAmount = useMemo(() => {
-        return amountToNumber(
-            currentDateBills.reduce((p, c) => {
-                return p + c.amount * (c.type === "income" ? 1 : -1);
-            }, 0),
+    const view = useAccountingView(current?.data);
+    if (!current) return null;
+    const data = current.data;
+    const mainCurrency = baseCurrency.id;
+    let totals: ReturnType<typeof getStatisticsTotals> | undefined;
+    let totalsError = "金额超出支持范围";
+    try {
+        totals = getStatisticsTotals(
+            getStatisticsLines(
+                data,
+                {
+                    start: bookDayjs(date).startOf("day").valueOf(),
+                    end: bookDayjs(date).endOf("day").valueOf(),
+                },
+                mainCurrency,
+                (from, to) => {
+                    const rate = convert(1, from, to).predict;
+                    return Number.isFinite(rate) && rate > 0 ? rate : undefined;
+                },
+                view.now,
+            ),
         );
-    }, [currentDateBills]);
-
-    const { budgets: allBudgets } = useBudget();
-    const budgets = allBudgets.filter((b) => {
-        return b.joiners.includes(userId) && b.start < Date.now();
-    });
-
-    const { homeWidgets } = useWidget();
-
-    const budgetContainer = useRef<HTMLDivElement>(null);
-    const widgetContainer = useRef<HTMLDivElement>(null);
-    const { count: budgetCount, index: curBudgetIndex } = useSnap(
-        budgetContainer,
-        0,
-    );
-    useSnap(widgetContainer, 0);
-
-    const allLoaded = useRef(false);
-    // 有预算时需要加载全部bills
-    useLayoutEffect(() => {
-        if (!allLoaded.current && budgets.length > 0) {
-            useLedgerStore.getState().refreshBillList();
-            allLoaded.current = true;
-        }
-    }, [budgets.length]);
-
-    // 滚动时需要加载全部bills
-    const onDateClick = useCallback(
-        (date: dayjs.Dayjs) => {
-            setCurrentDate(date);
-            const index = bills.findIndex((bill) => {
-                const billDate = dayjs.unix(bill.time / 1000);
-                return billDate.isSame(date, "day");
-            });
-            if (index >= 0) {
-                ledgerRef.current?.scrollToIndex(index);
-            }
-        },
-        [bills],
-    );
-
-    const onItemShow = useCallback((index: number) => {
-        if (!allLoaded.current && index >= 120) {
-            useLedgerStore.getState().refreshBillList();
-            allLoaded.current = true;
-        }
-    }, []);
-
-    const presence = useMemo(() => {
-        if (ledgerAnimationShows) {
-            return false;
-        }
-        return true;
-    }, []);
-
-    // safari capable
-    useEffect(() => {
-        ledgerAnimationShows = true;
-    }, []);
-
+    } catch (error) {
+        if (
+            error instanceof Error &&
+            error.message === "Missing display conversion basis"
+        )
+            totalsError = t("accounting-conversion-pending");
+    }
     return (
         <div className="w-full h-full p-2 flex flex-col overflow-hidden page-show">
-            <div className="flex flex-wrap flex-col w-full gap-2">
-                <div
-                    data-today-overview
-                    className={cn(
-                        "bg-stone-800 text-background dark:bg-foreground/20 dark:text-foreground relative h-20 w-full flex justify-end rounded-lg sm:flex-1 px-4 py-2 overflow-hidden transition-colors",
-                        showZenOverview &&
-                            `zen-overview zen-overview-style-${zenOverview.styleName}`,
-                    )}
-                >
-                    <span className="absolute top-2 left-4">
-                        {denseDate(currentDate)}
-                    </span>
-                    <AnimatedNumber
-                        value={currentDateAmount}
-                        className="font-bold text-4xl pb-4"
-                    />
-                    {currentBook && (
-                        <button
-                            type="button"
-                            className="absolute bottom-2 left-4 text-xs opacity-60 flex items-center gap-1 cursor-pointer"
-                            onClick={() => {
-                                showBookGuide();
-                            }}
-                        >
-                            <i className="icon-[mdi--book]"></i>
-                            {currentBook.name}
-                        </button>
-                    )}
-                    {zenOverview.enabled && (
-                        <button
-                            type="button"
-                            className={cn(
-                                "absolute bottom-2 rounded-full bg-background/20 inline-flex justify-center items-center px-2 right-4 text-xs opacity-70 cursor-pointer transition hover:opacity-100",
-                                showZenOverview &&
-                                    "zen-overview-entry opacity-100",
-                            )}
-                            onClick={zenOverview.open}
-                        >
-                            {showZenOverview
-                                ? t("zen-overview-ready")
-                                : t("zen-button-label")}
-                        </button>
-                    )}
-                </div>
-                <Promotion />
-                {homeWidgets.length > 0 && (
-                    <div className="w-full flex flex-col gap-1">
-                        <div
-                            ref={widgetContainer}
-                            className="w-full flex overflow-x-auto gap-2 scrollbar-hidden snap-mandatory snap-x"
-                        >
-                            {homeWidgets.map((widget) => (
-                                <div
-                                    key={widget.id}
-                                    className="flex-shrink-0 snap-start w-full min-h-[100px] border rounded-lg overflow-hidden"
-                                >
-                                    <WidgetPreview widget={widget} />
-                                </div>
-                            ))}
-                        </div>
-                    </div>
-                )}
-                <div className="w-full flex flex-col gap-1">
-                    <div
-                        ref={budgetContainer}
-                        className="w-full flex overflow-x-auto gap-2 scrollbar-hidden snap-mandatory snap-x"
-                    >
-                        {budgets.map((budget) => {
-                            return (
-                                <BudgetCard
-                                    className="flex-shrink-0 snap-start"
-                                    key={budget.id}
-                                    budget={budget}
-                                />
-                            );
-                        })}
-                    </div>
-                </div>
-            </div>
-            <div className="flex justify-between items-center pl-7 pr-5 py-1 h-8">
+            <div
+                data-today-overview
+                className="bg-stone-800 text-white dark:bg-foreground/20 relative h-24 w-full flex justify-end rounded-lg px-4 py-2 overflow-hidden shrink-0"
+            >
+                <span className="absolute top-2 left-4">
+                    <DatePicker type="date" value={date} onChange={setDate} />
+                </span>
+                <span className="font-bold text-3xl pt-3 pb-5 tabular-nums">
+                    {totals ? money(totals.net, mainCurrency) : totalsError}
+                </span>
                 <button
-                    className="cursor-pointer flex items-center"
                     type="button"
+                    className="absolute bottom-2 left-4 text-xs opacity-60 flex items-center gap-1 cursor-pointer"
                     onClick={() => {
-                        if (loading) {
-                            return;
-                        }
-                        useLedgerStore.getState().initCurrentBook();
+                        void showAccountingBooks().catch(() => {});
                     }}
                 >
-                    <div className={cn("opacity-0", loading && "opacity-100")}>
-                        <Loading className="[&_i]:size-[18px]" />
-                    </div>
+                    <i aria-hidden className="icon-[mdi--book]" />
+                    {current.book.name}
                 </button>
-                <div className="flex items-center gap-2">
-                    {budgetCount > 1 && (
-                        <PaginationIndicator
-                            count={budgetCount}
-                            current={curBudgetIndex}
-                        />
-                    )}
-                </div>
-                <HintTooltip
-                    persistKey={"cloudSyncHintShows"}
-                    content={t("zen-cloud-sync-tooltip")}
-                >
-                    <button
-                        type="button"
-                        className="cursor-pointer flex items-center"
-                        onClick={() => {
-                            StorageAPI.toSync();
-                        }}
-                    >
-                        {sync === "syncing" ? (
-                            <CloudLoopIcon width={18} height={18} />
-                        ) : (
-                            <i
-                                className={cn(syncIconClassName, "size-[18px]")}
-                            ></i>
-                        )}
-                    </button>
-                </HintTooltip>
             </div>
-            <div className="flex-1 translate-0 pb-[10px] overflow-hidden">
-                <div className="w-full h-full">
-                    {bills.length > 0 ? (
-                        <Ledger
-                            ref={ledgerRef}
-                            bills={bills}
-                            className={cn(bills.length > 0 && "relative")}
-                            enableDivideAsOrdered
-                            showTime
-                            onItemShow={onItemShow}
-                            onVisibleDateChange={setCurrentDate}
-                            onDateClick={onDateClick}
-                            presence={presence}
-                            showAssets={showAssets}
-                        />
-                    ) : (
-                        <div className="text-xs p-4 text-center">
-                            {t("nothing-here-add-one-bill")}
-                        </div>
-                    )}
-                </div>
+            <div className="flex justify-between items-center pl-7 pr-5 py-1 h-8 shrink-0 text-xs">
+                <button
+                    type="button"
+                    aria-label="重新加载账本"
+                    disabled={busy}
+                    className="cursor-pointer"
+                    onClick={() =>
+                        void accountingStore
+                            .getState()
+                            .reload()
+                            .catch(() => {})
+                    }
+                >
+                    <i
+                        aria-hidden
+                        className={`icon-[mdi--reload] ${busy ? "animate-spin" : ""}`}
+                    />
+                </button>
+                <span>
+                    收入 {totals ? money(totals.income, mainCurrency) : "—"} ·
+                    支出 {totals ? money(totals.expense, mainCurrency) : "—"}
+                </span>
+                <i
+                    role="img"
+                    aria-label="数据保存在此设备"
+                    className="icon-[mdi--database-outline]"
+                />
+            </div>
+            <FormError error={error} />
+            <div className="flex-1 min-h-0 overflow-hidden">
+                <TransactionList
+                    transactions={data.transactions}
+                    accounts={data.accounts}
+                    displayCurrency={mainCurrency}
+                    showPeriodDates={false}
+                    groupChildren
+                />
             </div>
         </div>
     );

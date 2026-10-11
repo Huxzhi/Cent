@@ -1,669 +1,1680 @@
-import { Switch } from "radix-ui";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { toast } from "sonner";
-import useCategory from "@/hooks/use-category";
+import { RadioGroup } from "radix-ui";
+import { useEffect, useRef, useState } from "react";
+import { useStore } from "zustand";
 import { useCurrency } from "@/hooks/use-currency";
 import { useWheelScrollX } from "@/hooks/use-wheel-scroll";
-import PopupLayout from "@/layouts/popup-layout";
-import { amountToNumber, numberToAmount } from "@/ledger/bill";
-import { ExpenseBillCategories, IncomeBillCategories } from "@/ledger/category";
-import type { Bill } from "@/ledger/type";
-import { categoriesGridClassName } from "@/ledger/utils";
-import { useIntl } from "@/locale";
-import { type EditBill, useLedgerStore } from "@/store/ledger";
-import { usePreferenceStore } from "@/store/preference";
-import { cn } from "@/utils";
 import { decodeApiKey } from "@/utils/api-key";
-import { getPredictNow } from "@/utils/predict";
+import PopupLayout from "../../layouts/popup-layout";
+import {
+    amountToDecimal,
+    createCurrencyExpense,
+    createJournalTransaction,
+    createTransaction,
+    getCurrencyExpenseCategory,
+    getCurrencyExpenseEstimate,
+    getEditableJournalInput,
+    getEditableTransactionInput,
+    getPurchaseAsset,
+    getPurchaseDepreciation,
+    type JournalTransactionInput,
+    type JournalType,
+    resolveCurrencyCostAccounts,
+    resolvePurchaseEndDate,
+    saveDepreciatingPurchase,
+    type Transaction,
+    type TransactionImage,
+    type TransactionLocation,
+    updateJournalTransaction,
+} from "../../ledger/accounting";
+import { getCurrencyExchangeAmounts } from "../../ledger/accounting/currency-exchange";
+import { isCurrencyTradingGroup } from "../../ledger/accounting/currency-trading";
+import { saveFundingTransaction } from "../../ledger/accounting/funding";
+import { accountingStore } from "../../store/accounting";
+import { usePreferenceStore } from "../../store/preference";
+import { bookDayjs, formatTime, parseBookDateTime } from "../../utils/time";
+import AccountForm from "../accounting/account-form";
+import { showAccountManager } from "../accounting/account-manager";
+import AccountPicker from "../accounting/account-picker";
+import { orderPickerAccounts } from "../accounting/account-picker-tree";
+import {
+    appendAmountKey,
+    calculateAmount,
+} from "../accounting/amount-calculator";
+import ExchangeFields, {
+    type ExchangeDraft,
+} from "../accounting/exchange-fields";
+import { useAccountingLabels } from "../accounting/i18n";
+import {
+    createTemplateDraft,
+    draftToEntries,
+    entriesToDraft,
+    getDraftTotals,
+    getPairedTemplateAccounts,
+    isPairedTemplate,
+    type JournalDraftEntry,
+    type JournalTemplate,
+    matchesPairedTemplate,
+} from "../accounting/journal-editor";
+import JournalFields from "../accounting/journal-fields";
+import PairedJournalFields from "../accounting/paired-journal-fields";
+import {
+    currencyLabel,
+    dateInput,
+    FormError,
+    money,
+    parseMoney,
+    useFormAction,
+} from "../accounting/shared";
+import { readTransactionImage } from "../accounting/transaction-image";
 import { showTagList } from "../bill-tag";
-import { showCategoryList } from "../category";
-import { CategoryItem } from "../category/item";
 import { DatePicker } from "../date-picker";
 import Deletable from "../deletable";
 import { FORMAT_IMAGE_SUPPORTED, showFilePicker } from "../file-picker";
 import SmartImage from "../image";
-import IOSUnscrolledInput from "../input";
 import Calculator from "../keyboard";
 import {
     LocationPickerProvider,
     showLocationPicker,
 } from "../map/location-picker";
 import CurrentLocation from "../simple-location";
-import { Select, SelectContent, SelectItem, SelectTrigger } from "../ui/select";
-import { goAddBill } from ".";
-import { RemarkHint } from "./remark";
+import { Button } from "../ui/button";
 import ResizeHandle from "./resize";
 import TagGroupSelector from "./tag-group";
 
-const defaultBill = {
-    type: "expense" as Bill["type"],
-    comment: "",
-    amount: 0,
-    categoryId: ExpenseBillCategories[0].id,
+type EditorMode = "expense" | "income" | "configuration";
+const modes: EditorMode[] = ["expense", "income", "configuration"];
+const modeClasses = {
+    expense: "data-[state=checked]:bg-semantic-expense",
+    income: "data-[state=checked]:bg-semantic-income",
+    configuration: "data-[state=checked]:bg-slate-700",
 };
 
 export default function EditorForm({
-    edit,
+    edit: transaction,
     onCancel,
     onConfirm,
 }: {
-    edit?: EditBill;
-    onConfirm?: (v: Omit<Bill, "id" | "creatorId">) => void;
+    edit?: Transaction;
     onCancel?: () => void;
+    onConfirm?: () => void;
 }) {
-    const t = useIntl();
-    const goBack = () => {
-        onCancel?.();
-    };
-
-    const { baseCurrency, convert, quickCurrencies, allCurrencies } =
-        useCurrency();
-
-    const { incomes, expenses, categories: allCategories } = useCategory();
-
-    const isCreate = edit === undefined;
-
-    const predictCategory = useMemo(() => {
-        // 只有新增账单时才展示预测
-        if (!isCreate) {
-            return;
-        }
-        const predict = getPredictNow();
-        const pc = predict?.category?.[0];
-        if (!pc) {
-            return;
-        }
-        const category = allCategories.find((v) => v.id === pc);
-        return category;
-    }, [isCreate, allCategories]);
-
-    const predictComments = useMemo(() => {
-        // 只有新增账单时才展示预测
-        if (!isCreate) {
-            return;
-        }
-        const predict = getPredictNow();
-        const pc = predict?.comment;
-        return pc;
-    }, [isCreate]);
-
-    const getMatchDefaultCategory = (categoryId: string) => {
-        const category = [...incomes, ...expenses].find(
-            (c) => c.id === categoryId,
-        );
-        if (!category) {
-            return categoryId;
-        }
-        const defaultSub = category.children.find((v) => v.defaultSelect);
-        if (!defaultSub) {
-            return categoryId;
-        }
-        return defaultSub.id;
-    };
-    const [billState, setBillState] = useState(() => {
-        const init = {
-            ...defaultBill,
-            time: Date.now(),
-            ...edit,
-            categoryId:
-                predictCategory?.id ??
-                getMatchDefaultCategory(
-                    edit?.categoryId ?? defaultBill.categoryId,
-                ),
-        };
-        if (edit?.currency?.target === baseCurrency.id) {
-            delete init.currency;
-        }
-        return init;
-    });
-
-    const handleParentCategoryClick = (parentCategoryId: string) => {
-        // 点击父类时，如果此前选中的【是该父类的子类】，则直接选中该父类
-        // 否则选中该父类的 MatchDefault 类别
-        setBillState((prev) => {
-            const parentCategory = [...incomes, ...expenses].find(
-                (c) => c.id === parentCategoryId,
-            );
-            const isPrevParentsChild = parentCategory?.children.some(
-                (c) => c.id === prev.categoryId,
-            );
-            if (isPrevParentsChild) {
-                return {
-                    ...prev,
-                    categoryId: parentCategoryId,
-                };
+    const { t, transactionTypes } = useAccountingLabels();
+    const { current, busy } = useStore(accountingStore);
+    const { multiCurrency } = useCurrency();
+    const allowMultiCurrency =
+        multiCurrency ||
+        (!!transaction &&
+            ["currency_exchange", "topup"].includes(transaction.type)) ||
+        (!!transaction &&
+            transaction.currency !==
+                (current?.data.currencySettings?.baseCurrency ?? "CNY"));
+    const keyboardHeight = usePreferenceStore(
+        (state) => state.keyboardHeight ?? 50,
+    );
+    const initialInput =
+        transaction &&
+        getEditableTransactionInput(transaction, current?.data.accounts ?? []);
+    const initialJournal =
+        transaction &&
+        getEditableJournalInput(transaction, current?.data.accounts ?? []);
+    const initialExpenseAccount =
+        initialInput?.type === "expense"
+            ? current?.data.accounts.find(
+                  (account) => account.id === initialInput.expenseAccountId,
+              )
+            : undefined;
+    const initialExpenseCategory = initialExpenseAccount
+        ? getCurrencyExpenseCategory(
+              initialExpenseAccount,
+              current?.data.accounts ?? [],
+          )
+        : undefined;
+    const initialExchange =
+        transaction?.exchange &&
+        ["currency_exchange", "topup"].includes(transaction.type)
+            ? transaction.exchange
+            : transaction?.type === "topup" && initialInput?.type === "topup"
+              ? {
+                    fromAccountId: initialInput.fromAccountId,
+                    toAccountId: initialInput.toAccountId,
+                }
+              : undefined;
+    const initialExchangeAmounts = transaction?.exchange
+        ? getCurrencyExchangeAmounts(transaction)
+        : initialExchange && initialInput
+          ? {
+                withdrawn: initialInput.amount,
+                received: initialInput.amount,
+                fee: 0,
             }
-            return {
-                ...prev,
-                categoryId: getMatchDefaultCategory(parentCategoryId),
-            };
-        });
-    };
-
-    const categories = billState.type === "expense" ? expenses : incomes;
-
-    const subCategories = useMemo(() => {
-        const selected = categories.find(
-            (c) =>
-                c.id === billState.categoryId ||
-                c.children.some((s) => s.id === billState.categoryId),
+          : undefined;
+    const [exchangeDraft, setExchangeDraft] = useState<ExchangeDraft>({
+        fromAccountId: initialExchange?.fromAccountId ?? "",
+        toAccountId: initialExchange?.toAccountId ?? "",
+        received: initialExchange
+            ? amountToDecimal(initialExchangeAmounts?.received ?? 0)
+            : "",
+        fee: initialExchange
+            ? amountToDecimal(initialExchangeAmounts?.fee ?? 0)
+            : "",
+        feeAccountId: transaction?.exchange?.feeAccountId ?? "",
+    });
+    const [exchangeActiveAmount, setExchangeActiveAmount] = useState<
+        "withdrawn" | "received" | "fee"
+    >("withdrawn");
+    const [id, setId] = useState(() => transaction?.id ?? crypto.randomUUID());
+    const [mode, setMode] = useState<EditorMode>(
+        initialInput?.type === "expense" || initialInput?.type === "income"
+            ? initialInput.type
+            : transaction
+              ? "configuration"
+              : "expense",
+    );
+    const [currency, setCurrency] = useState(
+        (initialInput?.type === "expense"
+            ? current?.data.accounts.find(
+                  (account) => account.id === initialInput.paymentAccountId,
+              )?.currency
+            : undefined) ??
+            transaction?.currency ??
+            current?.data.currencySettings?.baseCurrency ??
+            current?.data.accounts.find(
+                (account) => !account.archived && account.type === "asset",
+            )?.currency ??
+            "CNY",
+    );
+    const [leftId, setLeftId] = useState(
+        initialInput?.type === "income"
+            ? initialInput.depositAccountId
+            : initialInput?.type === "expense"
+              ? initialInput.paymentAccountId
+              : "",
+    );
+    const [rightId, setRightId] = useState(
+        initialInput?.type === "income"
+            ? initialInput.incomeAccountId
+            : initialInput?.type === "expense"
+              ? initialExpenseCategory
+                  ? initialExpenseCategory.archived
+                      ? (initialExpenseAccount?.id ?? initialExpenseCategory.id)
+                      : initialExpenseCategory.id
+                  : initialInput.expenseAccountId
+              : "",
+    );
+    const [quickAmount, setQuickAmount] = useState(
+        initialExchange
+            ? amountToDecimal(initialExchangeAmounts?.withdrawn ?? 0)
+            : initialInput
+              ? amountToDecimal(initialInput.amount)
+              : "",
+    );
+    const [rows, setRows] = useState<JournalDraftEntry[]>(() =>
+        initialJournal
+            ? entriesToDraft(initialJournal.entries)
+            : createTemplateDraft(
+                  "transfer",
+                  (current?.data.accounts ?? []).filter(
+                      (account) => account.currency === currency,
+                  ),
+                  "",
+                  () => crypto.randomUUID(),
+              ),
+    );
+    const [activeId, setActiveId] = useState("");
+    const [journalDirty, setJournalDirty] = useState(false);
+    const [journalType, setJournalType] = useState<JournalType>(
+        initialJournal?.type ?? "transfer",
+    );
+    const [template, setTemplate] = useState<JournalTemplate>(() => {
+        if (initialExchange) return "currency_exchange";
+        const type = initialJournal?.type;
+        if (!initialJournal) return transaction ? "custom" : "transfer";
+        if (
+            (type === "asset_purchase" ||
+                type === "liability_payment" ||
+                type === "transfer" ||
+                type === "liability_borrowing") &&
+            !matchesPairedTemplate(
+                type,
+                entriesToDraft(initialJournal.entries),
+                (current?.data.accounts ?? []).map((account) => ({
+                    ...account,
+                    paymentDisabled: false,
+                })),
+            )
+        )
+            return "custom";
+        return type === "asset_purchase" ||
+            type === "liability_payment" ||
+            type === "transfer" ||
+            type === "liability_borrowing"
+            ? type
+            : "custom";
+    });
+    const [time, setTime] = useState(() =>
+        dateInput(transaction?.time ?? Date.now()),
+    );
+    const originalDepreciation =
+        transaction &&
+        getPurchaseDepreciation(
+            transaction.id,
+            current?.data.transactions ?? [],
         );
-        if (selected?.children) {
-            return selected.children;
+    const originalPurchase =
+        transaction &&
+        getPurchaseAsset(transaction, current?.data.accounts ?? []);
+    const [periodEnabled, setPeriodEnabled] = useState(!!originalDepreciation);
+    const [serviceEnd, setServiceEnd] = useState(
+        originalDepreciation?.endTime
+            ? dateInput(originalDepreciation.endTime).slice(0, 10)
+            : "",
+    );
+    const [residual, setResidual] = useState(() =>
+        amountToDecimal(
+            originalPurchase && originalDepreciation
+                ? originalPurchase.cost +
+                      (originalDepreciation?.entries.find(
+                          (entry) =>
+                              entry.accountId === originalPurchase.asset.id,
+                      )?.amount ?? 0)
+                : 0,
+        ),
+    );
+    const [depreciationMonths, setDepreciationMonths] = useState(() => {
+        if (!originalDepreciation?.endTime) return "1";
+        const start = bookDayjs(originalDepreciation.time),
+            end = bookDayjs(originalDepreciation.endTime);
+        return String(
+            Math.max(
+                1,
+                (end.year() - start.year()) * 12 + end.month() - start.month(),
+            ),
+        );
+    });
+    const defaultServiceEnd = resolvePurchaseEndDate(time.slice(0, 10), 1);
+    const [description, setDescription] = useState(
+        transaction?.description ?? "",
+    );
+    const [images, setImages] = useState<TransactionImage[]>(
+        () => transaction?.images?.map((image) => ({ ...image })) ?? [],
+    );
+    const [location, setLocation] = useState<TransactionLocation | null>(
+        transaction?.location ? { ...transaction.location } : null,
+    );
+    const [mediaError, setMediaError] = useState<string>();
+    const [addingImages, setAddingImages] = useState(false);
+    const [managingLocation, setManagingLocation] = useState(false);
+    const locationRef = useRef<HTMLButtonElement>(null);
+    useEffect(() => {
+        if (!transaction && usePreferenceStore.getState().autoLocateWhenAddBill)
+            locationRef.current?.click();
+    }, [transaction]);
+    const addImages = async () => {
+        setAddingImages(true);
+        setMediaError(undefined);
+        try {
+            const files = await showFilePicker({
+                accept: FORMAT_IMAGE_SUPPORTED,
+                multiple: true,
+            });
+            if (files.length > 3 - images.length)
+                throw new Error(t("accounting-images-limit"));
+            const added = await Promise.all(
+                files.map((file) =>
+                    readTransactionImage(file, crypto.randomUUID()),
+                ),
+            );
+            setImages((previous) => [...previous, ...added]);
+        } catch (failure) {
+            setMediaError(
+                failure instanceof Error &&
+                    failure.message === t("accounting-images-limit")
+                    ? failure.message
+                    : t("accounting-images-failed"),
+            );
+        } finally {
+            setAddingImages(false);
         }
-        return categories.find((c) => c.id === selected?.parent)?.children;
-    }, [billState.categoryId, categories]);
-
-    const toConfirm = useCallback(() => {
-        onConfirm?.({
-            ...billState,
-        });
-    }, [onConfirm, billState]);
-
-    const chooseImage = async () => {
-        const [file] = await showFilePicker({ accept: FORMAT_IMAGE_SUPPORTED });
-        setBillState((v) => {
-            return { ...v, images: [...(v.images ?? []), file] };
-        });
     };
-
-    const mapConfig = useLedgerStore((state) => state.infos?.meta.map);
-    const amapKey = useMemo(
-        () =>
-            mapConfig?.amapKey ? decodeApiKey(mapConfig.amapKey) : undefined,
-        [mapConfig?.amapKey],
+    const editLocation = async () => {
+        const config = current?.data.mapConfig;
+        if (!location || !config?.amapKey || !config.amapSecurityCode) {
+            setMediaError(t("accounting-map-config-required"));
+            return;
+        }
+        setManagingLocation(true);
+        try {
+            const selected = await showLocationPicker({
+                location,
+                amapKey: decodeApiKey(config.amapKey),
+                amapSecurityCode: decodeApiKey(config.amapSecurityCode),
+            });
+            if (selected) setLocation(selected);
+        } catch {
+            /* 取消选择不修改位置。 */
+        } finally {
+            setManagingLocation(false);
+        }
+    };
+    const [tagIds, setTagIds] = useState<string[] | undefined>(
+        transaction ? [...(transaction.tagIds ?? [])] : undefined,
     );
-    const amapSecurityCode = useMemo(
-        () =>
-            mapConfig?.amapSecurityCode
-                ? decodeApiKey(mapConfig.amapSecurityCode)
-                : undefined,
-        [mapConfig?.amapSecurityCode],
+    const tagSelectorRef = useRef<HTMLDivElement>(null);
+    useWheelScrollX(tagSelectorRef);
+    const [amountFocused, setAmountFocused] = useState(true);
+    const [newFixedAsset, setNewFixedAsset] = useState(false);
+    const [newExchangeAsset, setNewExchangeAsset] = useState(false);
+    const [managingTags, setManagingTags] = useState(false);
+    const [calculatorError, setCalculatorError] = useState<string>();
+    const { error, submitting, run } = useFormAction();
+    const blocked = busy || submitting || addingImages;
+    const configuring = mode === "configuration";
+    const exchanging = configuring && template === "currency_exchange";
+    const paired =
+        configuring &&
+        isPairedTemplate(template) &&
+        rows.length === 2 &&
+        rows.filter((row) => row.side === "credit").length === 1 &&
+        rows.filter((row) => row.side === "debit").length === 1;
+    const exchangeFrom = current?.data.accounts.find(
+        (a) => a.id === exchangeDraft.fromAccountId,
     );
-    const handlePickLocation = useCallback(async () => {
-        if (!billState.location) return;
-        if (!amapKey || !amapSecurityCode) {
-            toast.warning(t("map-error-no-api-key"));
+    const exchangeTo = current?.data.accounts.find(
+        (a) => a.id === exchangeDraft.toAccountId,
+    );
+    const activeRow = rows.find((row) => row.id === activeId) ?? rows[0];
+    const amount =
+        configuring && !exchanging ? (activeRow?.amount ?? "") : quickAmount;
+    const setAmount = (value: string) => {
+        if (configuring && !exchanging) {
+            setJournalDirty(true);
+            setRows((previous) =>
+                previous.map((row) =>
+                    paired || row.id === activeRow?.id
+                        ? { ...row, amount: value }
+                        : row,
+                ),
+            );
+        } else setQuickAmount(value);
+    };
+    const accounts = resolveCurrencyCostAccounts(
+        current?.data.accounts ?? [],
+        current?.data.transactions ?? [],
+        current?.data.currencySettings?.baseCurrency,
+    )
+        .filter(
+            (account) =>
+                !account.archived &&
+                (account.subtype !== "prepaid" || !!account.costCurrency) &&
+                account.subtype !== "currency_trading" &&
+                !isCurrencyTradingGroup(account),
+        )
+        .map((account) =>
+            transaction?.entries.some((entry) => entry.accountId === account.id)
+                ? { ...account, paymentDisabled: false }
+                : account,
+        );
+    const currencies = [
+        ...new Set(accounts.map((account) => account.currency)),
+    ].sort((leftCurrency, rightCurrency) => {
+        const quick = current?.data.currencySettings?.quickCurrencies ?? [];
+        const rank = (value: string) => {
+            const index = quick.indexOf(value);
+            return index === -1 ? quick.length : index;
+        };
+        return (
+            rank(leftCurrency) - rank(rightCurrency) ||
+            leftCurrency.localeCompare(rightCurrency)
+        );
+    });
+    const eligible = accounts.filter(
+        (account) => account.currency === currency,
+    );
+    const leftAccounts = accounts.filter(
+        (account) =>
+            (account.type === "asset" &&
+                (mode !== "expense" || !account.paymentDisabled)) ||
+            (mode === "expense" && account.type === "liability"),
+    );
+    const left = leftId
+        ? (leftAccounts.find((account) => account.id === leftId)?.id ?? "")
+        : (leftAccounts.find(
+              (account) =>
+                  account.currency === currency &&
+                  account.presetKey === "starter:asset",
+          )?.id ??
+          leftAccounts.find((account) => account.currency === currency)?.id ??
+          leftAccounts[0]?.id ??
+          "");
+    const payment = accounts.find((account) => account.id === left);
+    const paymentCurrency =
+        paired && isPairedTemplate(template)
+            ? getPairedTemplateAccounts(template, rows, accounts).from?.currency
+            : payment?.currency;
+    useEffect(() => {
+        if (
+            (!configuring || paired) &&
+            paymentCurrency &&
+            paymentCurrency !== currency
+        )
+            setCurrency(paymentCurrency);
+    }, [configuring, paired, paymentCurrency, currency]);
+    let expenseEstimate: ReturnType<typeof getCurrencyExpenseEstimate>;
+    if (!configuring && mode === "expense" && payment?.costCurrency) {
+        try {
+            expenseEstimate = getCurrencyExpenseEstimate(
+                left,
+                parseMoney(calculateAmount(amount)),
+                current?.data.accounts ?? [],
+                current?.data.transactions ?? [],
+                {
+                    id,
+                    time:
+                        transaction && time === dateInput(transaction.time)
+                            ? transaction.time
+                            : parseBookDateTime(time),
+                    createdAt: transaction?.createdAt ?? Date.now(),
+                },
+                current?.data.currencySettings?.baseCurrency,
+            );
+        } catch {
+            /* 草稿金额和缺少成本依据时不猜测预览。 */
+        }
+    }
+    const rightAccounts = accounts.filter(
+        (account) =>
+            account.type === mode &&
+            (getCurrencyExpenseCategory(account, accounts).id === account.id ||
+                getCurrencyExpenseCategory(account, accounts).archived) &&
+            (account.currency === currency ||
+                (mode === "expense" &&
+                    account.currency === payment?.costCurrency)),
+    );
+    const right =
+        rightAccounts.find((account) => account.id === rightId)?.id ??
+        orderPickerAccounts(rightAccounts)[0]?.id ??
+        rightAccounts[0]?.id ??
+        "";
+    const canUseQuick =
+        !transaction ||
+        !!initialInput ||
+        (transaction.entries.length === 2 && !!initialJournal);
+    let journalReady = false;
+    try {
+        journalReady =
+            rows.length >= 2 &&
+            getDraftTotals(rows).difference === 0 &&
+            rows.every((row) =>
+                eligible.some(
+                    (account) =>
+                        account.id === row.accountId &&
+                        !(
+                            template === "custom" &&
+                            row.side === "credit" &&
+                            account.type === "asset" &&
+                            account.paymentDisabled
+                        ),
+                ),
+            ) &&
+            new Set(rows.map((row) => row.accountId)).size >= 2;
+        if (
+            configuring &&
+            isPairedTemplate(template) &&
+            !matchesPairedTemplate(template, rows, accounts)
+        )
+            journalReady = false;
+    } catch {
+        /* 草稿允许尚未填完。 */
+    }
+    let exchangeReady = false;
+    let executionRate: number | undefined;
+    try {
+        const withdrawn = parseMoney(calculateAmount(quickAmount));
+        const received = parseMoney(calculateAmount(exchangeDraft.received));
+        const fee = exchangeDraft.fee.trim()
+            ? parseMoney(calculateAmount(exchangeDraft.fee))
+            : 0;
+        const feeAccount = accounts.find(
+            (a) => a.id === exchangeDraft.feeAccountId,
+        );
+        exchangeReady =
+            !!exchangeFrom &&
+            !!exchangeTo &&
+            ["asset", "liability"].includes(exchangeFrom.type) &&
+            exchangeTo.type === "asset" &&
+            !exchangeFrom.archived &&
+            (!exchangeFrom.paymentDisabled ||
+                transaction?.exchange?.fromAccountId === exchangeFrom.id) &&
+            !exchangeTo.archived &&
+            exchangeFrom.id !== exchangeTo.id &&
+            (exchangeFrom.currency !== exchangeTo.currency ||
+                (exchangeFrom.type === "asset" &&
+                    withdrawn === received &&
+                    fee === 0)) &&
+            withdrawn > fee &&
+            received > 0 &&
+            fee >= 0 &&
+            (!fee ||
+                (feeAccount?.type === "expense" &&
+                    feeAccount.currency === exchangeFrom.currency));
+        if (exchangeReady && exchangeFrom?.currency !== exchangeTo?.currency)
+            executionRate = received / (withdrawn - fee);
+    } catch {
+        /* 草稿允许未填写。 */
+    }
+    const canSave = configuring
+        ? exchanging
+            ? exchangeReady && (!transaction || !!initialExchange)
+            : journalReady && (!transaction || !!initialJournal)
+        : !!left && !!right && canUseQuick;
+    const switchMode = (value: EditorMode) => {
+        if (
+            value === "configuration" &&
+            !journalDirty &&
+            mode !== "configuration"
+        ) {
+            setRows(
+                isPairedTemplate(template)
+                    ? createTemplateDraft(
+                          template,
+                          accounts.filter(
+                              (account) => account.currency === currency,
+                          ),
+                          quickAmount,
+                          () => crypto.randomUUID(),
+                      )
+                    : [
+                          {
+                              id:
+                                  rows.find((row) => row.side === "debit")
+                                      ?.id ?? crypto.randomUUID(),
+                              side: "debit",
+                              accountId: mode === "expense" ? right : left,
+                              amount: quickAmount,
+                          },
+                          {
+                              id:
+                                  rows.find((row) => row.side === "credit")
+                                      ?.id ?? crypto.randomUUID(),
+                              side: "credit",
+                              accountId: mode === "expense" ? left : right,
+                              amount: quickAmount,
+                          },
+                      ],
+            );
+            setActiveId("");
+        }
+        if (value !== "configuration") {
+            if (
+                leftId &&
+                !eligible.some(
+                    (account) =>
+                        account.id === leftId &&
+                        (account.type === "asset" ||
+                            (value === "expense" &&
+                                account.type === "liability")),
+                )
+            )
+                setLeftId("");
+            if (
+                rightId &&
+                !eligible.some(
+                    (account) =>
+                        account.id === rightId && account.type === value,
+                )
+            )
+                setRightId("");
+        }
+        setMode(value);
+        setCalculatorError(undefined);
+    };
+    const selectTemplate = (value: JournalTemplate) => {
+        setTemplate(value);
+        if (value !== "asset_purchase") setPeriodEnabled(false);
+        setJournalDirty(true);
+        setJournalType(
+            value === "custom" || value === "currency_exchange"
+                ? "journal"
+                : value === "depreciation"
+                  ? "expense"
+                  : value,
+        );
+        if (value === "currency_exchange") {
+            if (!exchangeDraft.fromAccountId) {
+                const asset =
+                    accounts.find(
+                        (a) =>
+                            a.id === left &&
+                            a.type === "asset" &&
+                            !a.paymentDisabled,
+                    ) ??
+                    accounts.find(
+                        (a) => a.type === "asset" && !a.paymentDisabled,
+                    );
+                if (asset) {
+                    setExchangeDraft((previous) => ({
+                        ...previous,
+                        fromAccountId: asset.id,
+                    }));
+                    setCurrency(asset.currency);
+                }
+            }
+        } else if (value !== "custom") {
+            const next = createTemplateDraft(value, eligible, amount, () =>
+                crypto.randomUUID(),
+            );
+            setRows(next);
+            setActiveId(next[0].id);
+        }
+    };
+    const save = (again = false) =>
+        run(async () => {
+            const now = Date.now();
+            await accountingStore.getState().updateData((data) => {
+                const common = {
+                    id,
+                    currency,
+                    ...(transaction?.endTime === undefined
+                        ? {}
+                        : { endTime: transaction.endTime }),
+                    time:
+                        transaction && time === dateInput(transaction.time)
+                            ? transaction.time
+                            : parseBookDateTime(time),
+                    description: description.trim() || undefined,
+                    parentTransactionId: transaction?.parentTransactionId,
+                    creatorId: transaction?.creatorId,
+                    tagIds,
+                    images,
+                    location,
+                };
+                const history = data.transactions.filter(
+                    (item) => item.id !== transaction?.id,
+                );
+                if (exchanging) {
+                    if (!exchangeFrom)
+                        throw new Error(t("accounting-journal-select-account"));
+                    const input = {
+                        ...common,
+                        ...exchangeDraft,
+                        withdrawn: parseMoney(calculateAmount(quickAmount)),
+                        received: parseMoney(
+                            calculateAmount(exchangeDraft.received),
+                        ),
+                        fee: exchangeDraft.fee.trim()
+                            ? parseMoney(calculateAmount(exchangeDraft.fee))
+                            : 0,
+                    };
+                    const trading = {
+                        fromId: crypto.randomUUID(),
+                        toId: crypto.randomUUID(),
+                        name: currencyLabel,
+                        groupId: crypto.randomUUID(),
+                        groupName: t("accounting-exchange-group"),
+                        baseCurrency: data.currencySettings?.baseCurrency,
+                    };
+                    const saved = saveFundingTransaction(
+                        input,
+                        data.accounts,
+                        data.transactions,
+                        now,
+                        trading,
+                        !!transaction,
+                    );
+                    return {
+                        ...data,
+                        accounts: saved.accounts,
+                        transactions: [...history, saved.transaction],
+                    };
+                }
+                let input: JournalTransactionInput;
+                if (
+                    !configuring &&
+                    mode === "expense" &&
+                    payment?.type === "asset"
+                ) {
+                    const saved = createCurrencyExpense(
+                        {
+                            ...common,
+                            type: "expense",
+                            amount: parseMoney(calculateAmount(amount)),
+                            paymentAccountId: left,
+                            expenseAccountId: right,
+                        },
+                        data.accounts,
+                        data.transactions,
+                        now,
+                        {
+                            edit: !!transaction,
+                            baseCurrency: data.currencySettings?.baseCurrency,
+                        },
+                    );
+                    return {
+                        ...data,
+                        accounts: saved.accounts,
+                        transactions: [...history, saved.transaction],
+                    };
+                }
+                if (configuring) {
+                    input = {
+                        ...common,
+                        type: journalType,
+                        entries: draftToEntries(rows),
+                    };
+                } else {
+                    if (!canUseQuick)
+                        throw new Error(t("accounting-journal-complex-edit"));
+                    const parsedAmount = parseMoney(calculateAmount(amount));
+                    const candidate = createTransaction(
+                        mode === "expense"
+                            ? {
+                                  ...common,
+                                  type: "expense",
+                                  amount: parsedAmount,
+                                  paymentAccountId: left,
+                                  expenseAccountId: right,
+                              }
+                            : {
+                                  ...common,
+                                  type: "income",
+                                  amount: parsedAmount,
+                                  depositAccountId: left,
+                                  incomeAccountId: right,
+                              },
+                        data.accounts,
+                        history,
+                        now,
+                    );
+                    input = {
+                        ...common,
+                        type: candidate.type as JournalType,
+                        entries: candidate.entries,
+                    };
+                }
+                const saved =
+                    transaction?.exchange && !configuring
+                        ? {
+                              ...createJournalTransaction(
+                                  input,
+                                  data.accounts,
+                                  history,
+                                  now,
+                              ),
+                              createdAt: transaction.createdAt,
+                              creatorId: transaction.creatorId,
+                              updatedAt: Math.max(now, transaction.updatedAt),
+                          }
+                        : transaction
+                          ? updateJournalTransaction(
+                                input,
+                                data.accounts,
+                                data.transactions,
+                                now,
+                            )
+                          : createJournalTransaction(
+                                input,
+                                data.accounts,
+                                history,
+                                now,
+                            );
+                if (
+                    (configuring && template === "asset_purchase") ||
+                    originalDepreciation
+                ) {
+                    return saveDepreciatingPurchase(
+                        data,
+                        saved,
+                        configuring &&
+                            template === "asset_purchase" &&
+                            periodEnabled
+                            ? {
+                                  endTime: parseBookDateTime(
+                                      `${serviceEnd || defaultServiceEnd}T00:00:00`,
+                                  ),
+                                  residualValue: parseMoney(residual),
+                              }
+                            : undefined,
+                        now,
+                        () => crypto.randomUUID(),
+                        t("accounting-depreciation-expense"),
+                    );
+                }
+                return { ...data, transactions: [...history, saved] };
+            }, now);
+            if (again) {
+                setId(crypto.randomUUID());
+                setPeriodEnabled(false);
+                setServiceEnd("");
+                setResidual("0");
+                setQuickAmount("");
+                setExchangeDraft((previous) => ({
+                    ...previous,
+                    received: "",
+                    fee: "",
+                }));
+                setRows((previous) =>
+                    previous.map((row) => ({
+                        ...row,
+                        id: crypto.randomUUID(),
+                        amount: "",
+                    })),
+                );
+                setActiveId("");
+                setDescription("");
+                setImages([]);
+                setLocation(null);
+                setMediaError(undefined);
+                setCalculatorError(undefined);
+            } else onConfirm?.();
+        });
+    const pressKey = (raw: string) => {
+        const key =
+            (
+                { c: "backspace", r: "again", x: "×", "-": "−" } as Record<
+                    string,
+                    string
+                >
+            )[raw] ?? raw;
+        if (key === "again") {
+            if (transaction) {
+                if (exchanging) {
+                    setQuickAmount("");
+                    setExchangeDraft((previous) => ({
+                        ...previous,
+                        received: "",
+                        fee: "",
+                    }));
+                    setExchangeActiveAmount("withdrawn");
+                } else if (configuring)
+                    setRows((previous) =>
+                        previous.map((row) => ({ ...row, amount: "" })),
+                    );
+                else setQuickAmount("");
+                setCalculatorError(undefined);
+            } else void save(true);
             return;
         }
         try {
-            const location = await showLocationPicker({
-                location: billState.location,
-                amapKey,
-                amapSecurityCode,
-            });
-            setBillState((prev) => ({ ...prev, location }));
-        } catch {
-            // Dialog cancellation should keep the original location untouched.
+            if (exchanging && exchangeActiveAmount !== "withdrawn") {
+                const value = appendAmountKey(
+                    exchangeDraft[exchangeActiveAmount],
+                    key,
+                );
+                setExchangeDraft((previous) => ({
+                    ...previous,
+                    [exchangeActiveAmount]: value,
+                }));
+            } else setAmount(appendAmountKey(amount, key));
+            setCalculatorError(undefined);
+        } catch (failure) {
+            setCalculatorError(
+                failure instanceof Error
+                    ? failure.message
+                    : t("accounting-calculation-failed"),
+            );
         }
-    }, [amapKey, amapSecurityCode, billState.location, t]);
-
-    const locationRef = useRef<HTMLButtonElement>(null);
-    const isAdd = useRef(!edit);
+    };
     useEffect(() => {
         if (
-            !isAdd.current ||
-            !usePreferenceStore.getState().autoLocateWhenAddBill
-        ) {
+            !amountFocused ||
+            blocked ||
+            newFixedAsset ||
+            newExchangeAsset ||
+            managingTags ||
+            managingLocation
+        )
             return;
-        }
-        locationRef.current?.click?.();
-    }, []);
-
-    // 金额输入与备注输入焦点互斥；备注失焦时金额默认“聚焦”（仅视觉光标闪动）
-    const remarkRef = useRef<HTMLInputElement>(null);
-    const [amountFocused, setAmountFocused] = useState(true);
-    const activateAmount = useCallback(() => {
-        setAmountFocused(true);
-        remarkRef.current?.blur();
-    }, []);
-
-    useEffect(() => {
-        if (amountFocused) {
-            const onPress = (event: KeyboardEvent) => {
-                const key = event.key;
+        const onKey = (event: KeyboardEvent) => {
+            if (
+                event.target instanceof HTMLInputElement ||
+                event.target instanceof HTMLSelectElement ||
+                event.ctrlKey ||
+                event.metaKey ||
+                event.altKey ||
+                (event.target instanceof Element &&
+                    event.target.closest(
+                        '[data-tag-selector], [role="menu"], [data-slot="popover-content"]',
+                    ))
+            )
+                return;
+            const key = event.key;
+            if (
+                key === "Enter" &&
+                event.target instanceof Element &&
+                event.target.closest('[role="radiogroup"]')
+            )
+                return;
+            if (
+                /^[\d.+\-=*/]$/.test(key) ||
+                key === "Backspace" ||
+                key === "Enter"
+            ) {
+                event.preventDefault();
                 if (key === "Enter") {
-                    toConfirm();
-                }
-            };
-            document.addEventListener("keypress", onPress);
-            return () => {
-                document.removeEventListener("keypress", onPress);
-            };
-        }
-    }, [amountFocused, toConfirm]);
-
-    const targetCurrency =
-        allCurrencies.find(
-            (c) => c.id === (billState.currency?.target ?? baseCurrency.id),
-        ) ?? baseCurrency;
-
-    const changeCurrency = (newCurrencyId: string) =>
-        setBillState((prev) => {
-            if (newCurrencyId === baseCurrency.id) {
-                return {
-                    ...prev,
-                    amount: prev.currency?.amount ?? prev.amount,
-                    currency: undefined,
-                };
-            }
-            const { predict } = convert(
-                amountToNumber(prev.currency?.amount ?? prev.amount),
-                newCurrencyId,
-                baseCurrency.id,
-                prev.time,
-            );
-            return {
-                ...prev,
-                amount: numberToAmount(predict),
-                currency: {
-                    base: baseCurrency.id,
-                    target: newCurrencyId,
-                    amount: prev.currency?.amount ?? prev.amount,
-                },
-            };
-        });
-
-    const calculatorInitialValue = billState?.currency
-        ? amountToNumber(billState.currency.amount)
-        : billState?.amount
-          ? amountToNumber(billState?.amount)
-          : 0;
-
-    const multiplyKey = usePreferenceStore((v) => {
-        if (!v.multiplyKey || v.multiplyKey === "off") {
-            return undefined;
-        }
-        if (v.multiplyKey === "double-zero") {
-            return "double-zero";
-        }
-        return "triple-zero";
-    });
-
-    const tagSelectorRef = useRef<HTMLDivElement>(null);
-    useWheelScrollX(tagSelectorRef);
-    return (
-        <Calculator.Root
-            multiplyKey={multiplyKey}
-            initialValue={calculatorInitialValue}
-            onValueChange={(n) => {
-                setBillState((v) => {
-                    if (v.currency) {
-                        const { predict } = convert(
-                            n,
-                            v.currency.target,
-                            v.currency.base,
-                            v.time,
-                        );
-                        return {
-                            ...v,
-                            amount: numberToAmount(predict),
-                            currency: {
-                                ...v.currency,
-                                amount: numberToAmount(n),
-                            },
-                        };
-                    }
-                    return {
-                        ...v,
-                        amount: numberToAmount(n),
-                    };
-                });
-            }}
-            input={amountFocused}
-        >
-            <PopupLayout
-                className="h-full gap-2 pb-0 scrollbar-hidden"
-                onBack={goBack}
-                title={
-                    <div className="pl-[54px] w-full min-h-12 rounded-lg flex pt-2 pb-0 overflow-hidden scrollbar-hidden">
-                        <div className="text-white">
-                            <Switch.Root
-                                className="w-24 h-12 relative bg-stone-900 rounded-lg p-1 flex justify-center items-center"
-                                checked={billState.type === "income"}
-                                onCheckedChange={() => {
-                                    setBillState((v) => ({
-                                        ...v,
-                                        type:
-                                            v.type === "expense"
-                                                ? "income"
-                                                : "expense",
-                                        categoryId:
-                                            v.type === "expense"
-                                                ? IncomeBillCategories[0].id
-                                                : ExpenseBillCategories[0].id,
-                                    }));
-                                }}
+                    if (canSave) void save();
+                } else
+                    pressKey(
+                        (
+                            { Backspace: "c", "*": "x", "/": "÷" } as Record<
+                                string,
+                                string
                             >
-                                <Switch.Thumb className="w-1/2 h-full flex justify-center items-center transition-all rounded-md bg-semantic-expense -translate-x-[22px] data-[state=checked]:bg-semantic-income data-[state=checked]:translate-x-[21px]">
-                                    <span className="text-[8px]">
-                                        {billState.type === "expense"
-                                            ? t("expense")
-                                            : t("income")}
-                                    </span>
-                                </Switch.Thumb>
-                            </Switch.Root>
-                        </div>
-                        <div className="flex-1 flex bg-stone-400 focus:outline rounded-lg ml-2 px-2 relative">
-                            {quickCurrencies.length > 0 && (
-                                <Select
-                                    value={targetCurrency?.id}
-                                    onValueChange={(newCurrencyId) => {
-                                        changeCurrency(newCurrencyId);
+                        )[key] ?? key,
+                    );
+            }
+        };
+        document.addEventListener("keydown", onKey);
+        return () => document.removeEventListener("keydown", onKey);
+    });
+    if (!current) return null;
+    const liveParent = current.data.transactions.find(
+        (item) => item.id === transaction?.id,
+    );
+    return (
+        <PopupLayout
+            className="h-full gap-2 pb-0 scrollbar-hidden"
+            onBack={() => {
+                if (!blocked) onCancel?.();
+            }}
+            title={
+                <fieldset
+                    disabled={blocked}
+                    className="pl-[54px] min-w-0 w-full min-h-12 rounded-lg flex gap-2 pt-2 pb-0 overflow-hidden"
+                    aria-label={t("accounting-type-amount")}
+                >
+                    <RadioGroup.Root
+                        aria-label={t("accounting-entry-mode")}
+                        orientation="horizontal"
+                        value={mode}
+                        disabled={blocked}
+                        onValueChange={(value) => {
+                            const selected = modes.find(
+                                (item) => item === value,
+                            );
+                            if (selected) switchMode(selected);
+                        }}
+                        className="w-36 sm:w-48 h-12 grid grid-cols-3 gap-1 rounded-lg bg-stone-900 p-1 shrink-0"
+                    >
+                        {modes.map((value) => (
+                            <RadioGroup.Item
+                                key={value}
+                                value={value}
+                                disabled={
+                                    blocked ||
+                                    (value !== "configuration" && !canUseQuick)
+                                }
+                                className={
+                                    "min-w-0 min-h-10 rounded-md px-0.5 text-[10px] sm:text-xs text-white/70 data-[state=checked]:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 " +
+                                    modeClasses[value]
+                                }
+                            >
+                                {value === "configuration"
+                                    ? t("accounting-configuration")
+                                    : transactionTypes[value]}
+                            </RadioGroup.Item>
+                        ))}
+                    </RadioGroup.Root>
+                    <div className="flex-1 min-w-0 flex bg-stone-400 rounded-lg px-2 relative items-center">
+                        {(currencies.length > 1 ||
+                            currency !==
+                                (current?.data.currencySettings?.baseCurrency ??
+                                    "CNY") ||
+                            exchanging) &&
+                            (configuring && template === "custom" ? (
+                                <select
+                                    aria-label={t("accounting-currency")}
+                                    className="w-10 sm:w-12 shrink-0 bg-transparent text-white text-[10px] sm:text-xs"
+                                    value={currency}
+                                    disabled={exchanging || !allowMultiCurrency}
+                                    onChange={(event) => {
+                                        setCurrency(event.target.value);
+                                        setLeftId("");
+                                        setRightId("");
+                                        setRows((previous) =>
+                                            previous.map((row) => ({
+                                                ...row,
+                                                accountId: "",
+                                            })),
+                                        );
                                     }}
                                 >
-                                    <div className="flex items-center">
-                                        <SelectTrigger className="w-fit outline-none ring-none border-none shadow-none p-0 [&_svg]:hidden">
-                                            <div className="flex items-center font-semibold text-2xl text-white">
-                                                {targetCurrency?.symbol}
-                                            </div>
-                                        </SelectTrigger>
-                                    </div>
-                                    <SelectContent>
-                                        {quickCurrencies.map((currency) => (
-                                            <SelectItem
-                                                key={currency.id}
-                                                value={currency.id}
-                                            >
-                                                {currency.label}
-                                                {`(${currency.symbol})`}
-                                            </SelectItem>
-                                        ))}
-                                    </SelectContent>
-                                </Select>
-                            )}
-                            <div className="flex-1 flex flex-col justify-center items-end overflow-hidden">
-                                {billState.currency && (
-                                    <div className="absolute text-white text-[8px] top-0">
-                                        ≈ {baseCurrency.symbol}{" "}
-                                        {amountToNumber(billState.amount)}{" "}
-                                        {baseCurrency.label}
-                                    </div>
-                                )}
-                                <Calculator.Value
-                                    focused={amountFocused}
-                                    onActivate={activateAmount}
-                                    className={cn(
-                                        "text-white text-3xl font-semibold text-right bg-transparent max-w-full overflow-x-auto scrollbar-hidden",
-                                    )}
-                                ></Calculator.Value>
-                                {billState.amount < 0 && (
-                                    <div className="absolute text-red-700 text-[8px] bottom-0">
-                                        {t("bill-negative-tip")}
-                                    </div>
-                                )}
-                            </div>
-                        </div>
-                    </div>
-                }
-            >
-                {/* categories */}
-                <div className="flex-1 flex-shrink-0 overflow-y-auto min-h-[80px] scrollbar-hidden flex flex-col px-2 text-sm font-medium gap-2 pb-1">
-                    <div className="flex flex-col min-h-[80px] grow-[2] shrink overflow-y-auto scrollbar-hidden w-full">
-                        <div
-                            className={cn(
-                                "grid gap-1",
-                                categoriesGridClassName(categories),
-                            )}
-                        >
-                            {categories.map((item) => (
-                                <CategoryItem
-                                    key={item.id}
-                                    category={item}
-                                    selected={billState.categoryId === item.id}
-                                    onMouseDown={() => {
-                                        handleParentCategoryClick(item.id);
-                                    }}
-                                />
+                                    {(currencies.length
+                                        ? currencies
+                                        : [currency]
+                                    ).map((value) => (
+                                        <option
+                                            key={value}
+                                            value={value}
+                                            className="text-foreground bg-background"
+                                        >
+                                            {currencyLabel(value)}
+                                        </option>
+                                    ))}
+                                </select>
+                            ) : (
+                                <output
+                                    aria-label={t("accounting-currency")}
+                                    title={currencyLabel(currency)}
+                                    className="max-w-24 truncate shrink-0 text-white text-xs"
+                                >
+                                    {currencyLabel(currency)}
+                                </output>
                             ))}
-                            <button
-                                type="button"
-                                className={cn(
-                                    `rounded-lg border flex-1 py-1 px-2 h-8 flex gap-2 items-center justify-center whitespace-nowrap cursor-pointer`,
-                                )}
-                                onClick={() => {
-                                    showCategoryList(billState.type);
-                                }}
-                            >
-                                <i className="icon-[mdi--settings]"></i>
-                                {t("edit")}
-                            </button>
-                        </div>
+                        <input
+                            aria-label={
+                                exchanging
+                                    ? t("accounting-exchange-withdrawn")
+                                    : t("accounting-amount")
+                            }
+                            value={amount}
+                            inputMode="decimal"
+                            placeholder="0.00"
+                            className={`flex-1 min-w-0 bg-transparent text-white font-semibold text-right outline-none ${amount.length > 8 ? "text-xs sm:text-2xl" : "text-2xl sm:text-3xl"}`}
+                            onFocus={() => {
+                                setAmountFocused(true);
+                                setExchangeActiveAmount("withdrawn");
+                            }}
+                            onKeyDown={(event) => {
+                                if (event.key === "Enter") {
+                                    event.preventDefault();
+                                    if (canSave) void save();
+                                }
+                            }}
+                            onChange={(event) => {
+                                setAmount(
+                                    event.target.value
+                                        .replaceAll("*", "×")
+                                        .replaceAll("/", "÷")
+                                        .replace(/(.)-/g, "$1−"),
+                                );
+                                setCalculatorError(undefined);
+                            }}
+                        />
                     </div>
-                    {(subCategories?.length ?? 0) > 0 && (
-                        <div className="flex flex-col min-h-[68px] grow-[1] shrink max-h-fit overflow-y-auto rounded-md p-0 shadow-[0_0_0_2px_rgb(255_255_255),0_0_0_3px_rgb(229_231_235)] scrollbar-hidden">
-                            <div
-                                className={cn(
-                                    "grid gap-1",
-                                    categoriesGridClassName(subCategories),
-                                )}
-                            >
-                                {subCategories?.map((subCategory) => {
-                                    return (
-                                        <CategoryItem
-                                            key={subCategory.id}
-                                            category={subCategory}
-                                            selected={
-                                                billState.categoryId ===
-                                                subCategory.id
+                </fieldset>
+            }
+        >
+            <fieldset
+                disabled={blocked}
+                className="flex-1 min-w-0 min-h-0 overflow-y-auto scrollbar-hidden flex flex-col px-2 text-sm font-medium gap-2 pb-1"
+            >
+                {configuring ? (
+                    <>
+                        {transaction && !initialJournal && !initialExchange ? (
+                            <p role="alert">
+                                {t("accounting-journal-dedicated-editor")}
+                            </p>
+                        ) : (
+                            <JournalFields
+                                periodFields={
+                                    <div className="rounded-md border p-2 space-y-2">
+                                        <label className="flex items-center gap-2">
+                                            <input
+                                                type="checkbox"
+                                                checked={periodEnabled}
+                                                onChange={(event) =>
+                                                    setPeriodEnabled(
+                                                        event.target.checked,
+                                                    )
+                                                }
+                                            />
+                                            {t("accounting-period-enable")}
+                                        </label>
+                                        {periodEnabled && (
+                                            <>
+                                                <label className="flex items-center gap-2">
+                                                    {t("accounting-period-end")}
+                                                    <input
+                                                        type="date"
+                                                        className="min-w-0 rounded-md border bg-background p-2"
+                                                        value={
+                                                            serviceEnd ||
+                                                            defaultServiceEnd
+                                                        }
+                                                        min={time.slice(0, 10)}
+                                                        onChange={(event) =>
+                                                            setServiceEnd(
+                                                                event.target
+                                                                    .value,
+                                                            )
+                                                        }
+                                                    />
+                                                </label>
+                                                <label className="flex items-center gap-2">
+                                                    {t(
+                                                        "accounting-purchase-depreciation-months",
+                                                    )}
+                                                    <input
+                                                        type="number"
+                                                        min="1"
+                                                        max="1200"
+                                                        className="min-w-0 w-24 rounded-md border bg-background p-2"
+                                                        value={
+                                                            depreciationMonths
+                                                        }
+                                                        onChange={(event) => {
+                                                            setDepreciationMonths(
+                                                                event.target
+                                                                    .value,
+                                                            );
+                                                            const months =
+                                                                Number(
+                                                                    event.target
+                                                                        .value,
+                                                                );
+                                                            if (
+                                                                Number.isInteger(
+                                                                    months,
+                                                                ) &&
+                                                                months > 0 &&
+                                                                months <= 1200
+                                                            )
+                                                                setServiceEnd(
+                                                                    resolvePurchaseEndDate(
+                                                                        time.slice(
+                                                                            0,
+                                                                            10,
+                                                                        ),
+                                                                        months,
+                                                                    ),
+                                                                );
+                                                        }}
+                                                    />
+                                                </label>
+                                                <label className="flex items-center gap-2">
+                                                    {t(
+                                                        "accounting-depreciation-residual",
+                                                    )}
+                                                    <input
+                                                        inputMode="decimal"
+                                                        className="min-w-0 w-24 rounded-md border bg-background p-2"
+                                                        value={residual}
+                                                        onChange={(event) =>
+                                                            setResidual(
+                                                                event.target
+                                                                    .value,
+                                                            )
+                                                        }
+                                                    />
+                                                </label>
+                                                <p className="text-xs text-muted-foreground">
+                                                    {t(
+                                                        "accounting-depreciation-default-expense-help",
+                                                    )}
+                                                </p>
+                                                <p className="text-xs text-muted-foreground">
+                                                    {t(
+                                                        "accounting-period-purchase-help",
+                                                    )}
+                                                </p>
+                                            </>
+                                        )}
+                                    </div>
+                                }
+                                exchangeFields={
+                                    <>
+                                        <ExchangeFields
+                                            accounts={(
+                                                current?.data.accounts ?? []
+                                            ).filter(
+                                                (account) =>
+                                                    !account.archived &&
+                                                    account.subtype !==
+                                                        "currency_trading" &&
+                                                    !isCurrencyTradingGroup(
+                                                        account,
+                                                    ) &&
+                                                    (account.subtype !==
+                                                        "prepaid" ||
+                                                        !!account.costCurrency),
+                                            )}
+                                            draft={exchangeDraft}
+                                            onCreateDestination={() =>
+                                                setNewExchangeAsset(true)
                                             }
-                                            onMouseDown={() => {
-                                                setBillState((v) => ({
-                                                    ...v,
-                                                    categoryId: subCategory.id,
-                                                }));
+                                            onActiveAmount={
+                                                setExchangeActiveAmount
+                                            }
+                                            onChange={(next) => {
+                                                setExchangeDraft(next);
+                                                const source = accounts.find(
+                                                    (a) =>
+                                                        a.id ===
+                                                        next.fromAccountId,
+                                                );
+                                                if (source) {
+                                                    setCurrency(
+                                                        source.currency,
+                                                    );
+                                                }
                                             }}
+                                            onAmountFocus={(focused) =>
+                                                setAmountFocused(!focused)
+                                            }
                                         />
+                                        {executionRate !== undefined && (
+                                            <p className="text-xs text-muted-foreground">
+                                                {t("accounting-exchange-rate", {
+                                                    from: exchangeFrom
+                                                        ? currencyLabel(
+                                                              exchangeFrom.currency,
+                                                          )
+                                                        : "",
+                                                    to: exchangeTo
+                                                        ? currencyLabel(
+                                                              exchangeTo.currency,
+                                                          )
+                                                        : "",
+                                                    rate: executionRate.toPrecision(
+                                                        10,
+                                                    ),
+                                                })}
+                                            </p>
+                                        )}
+                                    </>
+                                }
+                                pairedFields={
+                                    isPairedTemplate(template) ? (
+                                        <PairedJournalFields
+                                            template={template}
+                                            accounts={accounts}
+                                            rows={rows}
+                                            disabled={blocked}
+                                            onChange={(next) => {
+                                                setJournalDirty(true);
+                                                setRows(next);
+                                                const source =
+                                                    getPairedTemplateAccounts(
+                                                        template,
+                                                        next,
+                                                        accounts,
+                                                    ).from;
+                                                if (source) {
+                                                    setCurrency(
+                                                        source.currency,
+                                                    );
+                                                }
+                                            }}
+                                            onManage={() => {
+                                                void showAccountManager(
+                                                    "asset",
+                                                ).catch(() => {});
+                                            }}
+                                            onNewAsset={() =>
+                                                setNewFixedAsset(true)
+                                            }
+                                        />
+                                    ) : undefined
+                                }
+                                rows={rows}
+                                accounts={eligible}
+                                currency={currency}
+                                activeId={activeRow?.id ?? ""}
+                                template={template}
+                                disabled={blocked}
+                                onRowsChange={(next) => {
+                                    setJournalDirty(true);
+                                    setRows(next);
+                                }}
+                                onActiveChange={setActiveId}
+                                onTemplateChange={selectTemplate}
+                                onAmountFocus={(focused) =>
+                                    setAmountFocused(!focused)
+                                }
+                                onManage={() => {
+                                    void showAccountManager("asset").catch(
+                                        () => {},
                                     );
-                                })}
+                                }}
+                            />
+                        )}
+                        {!canUseQuick && !initialExchange && (
+                            <p className="text-xs text-muted-foreground">
+                                {t("accounting-journal-complex-edit")}
+                            </p>
+                        )}
+                    </>
+                ) : (
+                    <>
+                        <AccountPicker
+                            label={
+                                mode === "income"
+                                    ? t("accounting-receiving-asset")
+                                    : t("accounting-payment-account")
+                            }
+                            accounts={leftAccounts}
+                            value={left}
+                            onChange={(accountId) => {
+                                const account = leftAccounts.find(
+                                    (item) => item.id === accountId,
+                                );
+                                if (account) {
+                                    setLeftId(account.id);
+                                    setCurrency(account.currency);
+                                }
+                            }}
+                            disabled={blocked}
+                            hierarchical
+                            compact
+                        />
+                        {expenseEstimate && (
+                            <p
+                                className="text-xs text-muted-foreground"
+                                title={t("accounting-currency-estimate-help")}
+                            >
+                                {t("accounting-currency-estimate")} ≈{" "}
+                                {money(
+                                    expenseEstimate.amount,
+                                    expenseEstimate.currency,
+                                )}
+                            </p>
+                        )}
+                        <AccountPicker
+                            label={
+                                mode === "expense"
+                                    ? t("accounting-expense-category-account")
+                                    : t("accounting-income-category-account")
+                            }
+                            accounts={rightAccounts}
+                            value={right}
+                            onChange={setRightId}
+                            disabled={blocked}
+                            hierarchical
+                            onManage={() => {
+                                void showAccountManager(mode).catch(() => {});
+                            }}
+                        />
+                        {(!left || !right) && (
+                            <p className="text-xs text-muted-foreground">
+                                {t("accounting-settings-create-account")}
+                            </p>
+                        )}
+                    </>
+                )}
+                {!!liveParent?.children?.length && (
+                    <section
+                        data-testid="transaction-children"
+                        className="rounded-md border p-3 space-y-2 shrink-0"
+                    >
+                        <h3 className="text-sm font-medium">
+                            {t("accounting-child-transactions", {
+                                count: liveParent.children.length,
+                            })}
+                        </h3>
+                        <p className="text-xs text-muted-foreground">
+                            {t("accounting-children-edit-help")}
+                        </p>
+                        {liveParent.children.map((child) => (
+                            <div
+                                key={child.id}
+                                className="text-sm border-t pt-2"
+                            >
+                                <p>
+                                    {child.description ||
+                                        transactionTypes[child.type]}
+                                </p>
+                                <p className="text-xs text-muted-foreground">
+                                    {formatTime(child.time)}
+                                    {child.endTime !== undefined && (
+                                        <> → {formatTime(child.endTime)}</>
+                                    )}
+                                </p>
                             </div>
-                        </div>
-                    )}
-                </div>
-                {/* tags */}
+                        ))}
+                    </section>
+                )}
+            </fieldset>
+            <fieldset disabled={blocked} className="shrink-0 min-w-0">
                 <div
                     ref={tagSelectorRef}
-                    className="w-full h-[40px] flex-shrink-0 flex-grow-0 flex gap-1 py-1 items-center overflow-x-auto px-2 text-sm font-medium scrollbar-hidden"
+                    data-tag-selector
+                    className="w-full h-10 flex gap-1 py-1 items-center overflow-x-auto px-2 text-sm font-medium scrollbar-hidden"
                 >
                     <TagGroupSelector
-                        isCreate={isCreate}
-                        selectedTags={billState.tagIds}
-                        onSelectChange={(newTagIds, extra) => {
-                            setBillState((prev) => ({
-                                ...prev,
-                                tagIds: newTagIds,
-                            }));
-                            if (extra?.preferCurrency) {
-                                changeCurrency(extra.preferCurrency);
+                        isCreate={!transaction}
+                        selectedTags={tagIds}
+                        onSelectChange={(selected, extra) => {
+                            setTagIds(selected);
+                            if (
+                                !exchanging &&
+                                allowMultiCurrency &&
+                                extra?.preferCurrency &&
+                                extra.preferCurrency !== currency &&
+                                currencies.includes(extra.preferCurrency)
+                            ) {
+                                setCurrency(extra.preferCurrency);
+                                setLeftId("");
+                                setRightId("");
+                                setRows((previous) =>
+                                    previous.map((row) => ({
+                                        ...row,
+                                        accountId: "",
+                                    })),
+                                );
                             }
                         }}
                     />
                     <button
                         type="button"
-                        className={cn(
-                            `rounded-lg border py-1 px-2 h-8 flex gap-2 items-center justify-center whitespace-nowrap cursor-pointer`,
-                        )}
+                        className="rounded-lg border py-1 px-2 h-8 shrink-0 flex gap-2 items-center justify-center whitespace-nowrap cursor-pointer"
                         onClick={() => {
-                            showTagList();
+                            setManagingTags(true);
+                            void showTagList()
+                                .catch(() => {})
+                                .finally(() => setManagingTags(false));
                         }}
                     >
-                        <i className="icon-[mdi--tag-text-outline]"></i>
+                        <i
+                            aria-hidden
+                            className="icon-[mdi--tag-text-outline]"
+                        />
                         {t("edit-tags")}
                     </button>
                 </div>
-
-                {/* keyboard area */}
-                <div
-                    className={cn(
-                        "h-[calc(480px+160px*(var(--bekh,0.5)-0.5))] sm:h-[calc(380px+160px*(var(--bekh,0.5)-0.5))] min-h-[264px] max-h-[calc(100%-124px)]",
-                        "keyboard-field relative flex gap-2 flex-col justify-start bg-stone-900 sm:rounded-b-md text-[white] p-2 pb-[max(var(--safe-area-inset-bottom),8px)]",
-                    )}
-                >
-                    <ResizeHandle />
-                    <div className="flex justify-between items-center">
-                        <div className="flex gap-2 items-center h-10">
-                            <div className="flex items-center h-full">
-                                {(billState.images?.length ?? 0) > 0 && (
-                                    <div className="pr-2 flex gap-[6px] items-center overflow-x-auto max-w-22 h-full scrollbar-hidden">
-                                        {billState.images?.map((img, index) => (
-                                            <Deletable
-                                                // biome-ignore lint/suspicious/noArrayIndexKey: <explanation>
-                                                key={index}
-                                                onDelete={() => {
-                                                    setBillState((v) => ({
-                                                        ...v,
-                                                        images: v.images?.filter(
-                                                            (m) => m !== img,
-                                                        ),
-                                                    }));
-                                                }}
-                                            >
-                                                <SmartImage
-                                                    source={img}
-                                                    alt=""
-                                                    className="w-6 h-6 object-cover rounded"
-                                                />
-                                            </Deletable>
-                                        ))}
-                                    </div>
-                                )}
-                                {(billState.images?.length ?? 0) < 3 && (
-                                    <button
-                                        type="button"
-                                        className="px-1 flex justify-center items-center rounded-full transition-all cursor-pointer"
-                                        onClick={chooseImage}
-                                    >
-                                        <i className="icon-xs icon-[mdi--image-plus-outline] text-[white]"></i>
-                                    </button>
-                                )}
-                            </div>
-                            <div className="h-full flex items-center">
-                                {billState?.location ? (
+            </fieldset>
+            <fieldset
+                disabled={blocked}
+                style={
+                    { "--bekh": keyboardHeight / 100 } as React.CSSProperties
+                }
+                className="relative min-w-0 bg-stone-900 text-white flex flex-col gap-2 p-2 shrink-0 h-[min(48dvh,calc(480px+160px*(var(--bekh,0.5)-0.5)))] sm:h-[min(48dvh,calc(380px+160px*(var(--bekh,0.5)-0.5)))]"
+            >
+                <ResizeHandle />
+                <div className="flex justify-between items-center gap-2 h-10 shrink-0">
+                    <div className="flex min-w-0 items-center gap-2">
+                        {!!images.length && (
+                            <div className="flex items-center gap-2 shrink-0 py-1 px-1">
+                                {images.map((image) => (
                                     <Deletable
+                                        key={image.id}
+                                        deleteLabel={t(
+                                            "accounting-remove-image",
+                                        )}
                                         onDelete={() => {
-                                            setBillState((prev) => {
-                                                return {
-                                                    ...prev,
-                                                    location: undefined,
-                                                };
-                                            });
+                                            if (!blocked)
+                                                setImages((previous) =>
+                                                    previous.filter(
+                                                        (item) =>
+                                                            item.id !==
+                                                            image.id,
+                                                    ),
+                                                );
                                         }}
                                     >
-                                        <button
-                                            type="button"
-                                            className="px-1 flex items-center justify-center"
-                                            onClick={handlePickLocation}
-                                        >
-                                            <i className="w-5 icon-[mdi--location-radius]"></i>
-                                        </button>
+                                        <SmartImage
+                                            source={image.dataUrl}
+                                            alt={image.name}
+                                            className="size-6 rounded object-cover"
+                                        />
                                     </Deletable>
-                                ) : (
-                                    <CurrentLocation
-                                        ref={locationRef}
-                                        className="px-1 flex items-center justify-center"
-                                        onValueChange={(v) => {
-                                            setBillState((prev) => {
-                                                return { ...prev, location: v };
-                                            });
-                                        }}
-                                    >
-                                        <i className="icon-[mdi--add-location]" />
-                                    </CurrentLocation>
-                                )}
+                                ))}
                             </div>
-                            <div className="rounded-full transition-all hover:(bg-stone-700) active:(bg-stone-500)">
-                                <DatePicker
-                                    fixedTime
-                                    value={billState.time}
-                                    onChange={(time) => {
-                                        setBillState((prev) => {
-                                            if (!prev.currency) {
-                                                return {
-                                                    ...prev,
-                                                    time: time,
-                                                };
-                                            }
-                                            const { predict } = convert(
-                                                amountToNumber(
-                                                    prev.currency?.amount ??
-                                                        prev.amount,
-                                                ),
-                                                prev.currency.target,
-                                                baseCurrency.id,
-                                                time,
-                                            );
-                                            return {
-                                                ...prev,
-                                                time: time,
-                                                amount: numberToAmount(predict),
-                                                currency: {
-                                                    base: baseCurrency.id,
-                                                    target: prev.currency
-                                                        .target,
-                                                    amount:
-                                                        prev.currency?.amount ??
-                                                        prev.amount,
-                                                },
-                                            };
-                                        });
-                                    }}
-                                />
-                            </div>
-                        </div>
-                        <RemarkHint
-                            recommends={predictComments}
-                            onSelect={(v) => {
-                                setBillState((prev) => ({
-                                    ...prev,
-                                    comment: `${prev.comment} ${v}`,
-                                }));
-                            }}
-                        >
-                            <div className="flex h-full flex-1">
-                                <IOSUnscrolledInput
-                                    ref={remarkRef}
-                                    value={billState.comment}
-                                    onChange={(e) => {
-                                        setBillState((v) => ({
-                                            ...v,
-                                            comment: e.target.value,
-                                        }));
-                                    }}
-                                    onFocus={() => setAmountFocused(false)}
-                                    onBlur={() => setAmountFocused(true)}
-                                    type="text"
-                                    className="w-full bg-transparent text-white text-right placeholder-opacity-50 outline-none"
-                                    placeholder={t("comment")}
-                                    enterKeyHint="done"
-                                />
-                            </div>
-                        </RemarkHint>
-                    </div>
+                        )}
 
-                    <button
-                        type="button"
-                        className="flex h-[80px] min-h-[48px] justify-center items-center bg-green-700 rounded-lg font-bold text-lg cursor-pointer"
-                        onClick={toConfirm}
-                    >
-                        <i className="icon-[mdi--check] icon-md"></i>
-                    </button>
-                    <Calculator.Keyboard
-                        className={cn("flex-1")}
-                        onKey={(v) => {
-                            if (v === "r") {
-                                toConfirm();
-                                setTimeout(() => {
-                                    goAddBill({
-                                        ...defaultBill,
-                                        time: billState.time,
-                                    });
-                                }, 10);
+                        {images.length < 3 && (
+                            <button
+                                type="button"
+                                disabled={blocked}
+                                aria-label={t("accounting-add-image")}
+                                title={t("accounting-add-image")}
+                                onClick={() => void addImages()}
+                                className="shrink-0 flex items-center"
+                            >
+                                <i className="icon-[mdi--image-plus-outline] size-5" />
+                            </button>
+                        )}
+                        {location ? (
+                            <Deletable
+                                deleteLabel={t("accounting-remove-location")}
+                                onDelete={() => {
+                                    if (!blocked) setLocation(null);
+                                }}
+                            >
+                                <button
+                                    type="button"
+                                    disabled={blocked}
+                                    aria-label={t("accounting-edit-location")}
+                                    title={`${location.latitude}, ${location.longitude}`}
+                                    onClick={() => void editLocation()}
+                                    className="flex items-center"
+                                >
+                                    <i className="icon-[mdi--map-marker-radius] size-5" />
+                                </button>
+                            </Deletable>
+                        ) : (
+                            <CurrentLocation
+                                ref={locationRef}
+                                label={t("accounting-add-location")}
+                                disabled={blocked}
+                                onValueChange={(value) => {
+                                    setLocation(value);
+                                    setMediaError(undefined);
+                                }}
+                                onError={() =>
+                                    setMediaError(
+                                        t("accounting-location-failed"),
+                                    )
+                                }
+                            >
+                                <i className="icon-[mdi--add-location] size-5" />
+                            </CurrentLocation>
+                        )}
+                        <DatePicker
+                            fixedTime
+                            value={
+                                transaction &&
+                                time === dateInput(transaction.time)
+                                    ? transaction.time
+                                    : parseBookDateTime(time)
                             }
-                        }}
+                            onChange={(value) => setTime(dateInput(value))}
+                        />
+                    </div>
+                    <input
+                        aria-label={t("accounting-remark")}
+                        value={description}
+                        placeholder={t("accounting-remark")}
+                        className="min-w-0 w-1/3 bg-transparent text-white text-right outline-none"
+                        onFocus={() => setAmountFocused(false)}
+                        onBlur={() => setAmountFocused(true)}
+                        onChange={(event) => setDescription(event.target.value)}
                     />
                 </div>
-                <LocationPickerProvider />
-            </PopupLayout>
-        </Calculator.Root>
+                {exchanging && (
+                    <p className="text-xs opacity-75">
+                        {t("accounting-exchange-keyboard", {
+                            field: t(
+                                exchangeActiveAmount === "withdrawn"
+                                    ? "accounting-exchange-withdrawn"
+                                    : exchangeActiveAmount === "received"
+                                      ? "accounting-exchange-received"
+                                      : "accounting-exchange-fee",
+                            ),
+                            currency: currencyLabel(
+                                exchangeActiveAmount === "received"
+                                    ? (exchangeTo?.currency ?? currency)
+                                    : (exchangeFrom?.currency ?? currency),
+                            ),
+                        })}
+                    </p>
+                )}
+                <FormError error={mediaError || calculatorError || error} />
+                <Button
+                    type="button"
+                    aria-label={t("accounting-save-transaction")}
+                    onClick={() => void save()}
+                    disabled={blocked || !canSave}
+                    className="h-[clamp(3rem,8dvh,5rem)] shrink-0 w-full bg-green-700 hover:bg-green-800 text-white text-xl"
+                >
+                    {blocked ? (
+                        t("accounting-saving")
+                    ) : (
+                        <i aria-hidden className="icon-[mdi--check] size-6" />
+                    )}
+                </Button>
+                <Calculator.Keyboard
+                    className="flex-1 min-h-0"
+                    disabled={blocked}
+                    repeatDisabled={!amount || !canSave}
+                    repeatLabel={
+                        transaction
+                            ? t("accounting-clear")
+                            : t("accounting-add-again")
+                    }
+                    onKey={pressKey}
+                />
+            </fieldset>
+            {newFixedAsset && (
+                <AccountForm
+                    fixedType="asset"
+                    initial={{
+                        type: "asset",
+                        currency,
+                        subtype: "fixed_asset",
+                    }}
+                    onClose={() => setNewFixedAsset(false)}
+                    onSaved={(accountId) =>
+                        setRows((previous) =>
+                            previous.map((row, index) =>
+                                (template === "depreciation"
+                                    ? row.side === "credit"
+                                    : row.side === "debit") &&
+                                index === (template === "depreciation" ? 1 : 0)
+                                    ? { ...row, accountId }
+                                    : row,
+                            ),
+                        )
+                    }
+                />
+            )}
+            {newExchangeAsset && (
+                <AccountForm
+                    fixedType="asset"
+                    initial={{
+                        type: "asset",
+                        currency:
+                            exchangeTo?.currency ??
+                            exchangeFrom?.currency ??
+                            currency,
+                    }}
+                    onClose={() => setNewExchangeAsset(false)}
+                    onSaved={(accountId) => {
+                        const created = accountingStore
+                            .getState()
+                            .current?.data.accounts.find(
+                                (account) => account.id === accountId,
+                            );
+                        setExchangeDraft((previous) => ({
+                            ...previous,
+                            toAccountId: accountId,
+                            ...(created?.currency === exchangeFrom?.currency
+                                ? { fee: "", feeAccountId: "" }
+                                : {}),
+                        }));
+                    }}
+                />
+            )}
+            <LocationPickerProvider />
+        </PopupLayout>
     );
 }

@@ -63,10 +63,6 @@ export const useCurrencyStore = create<Store>()(
                 updateCache(rates, DefaultCurrencyId, dateStr);
             };
 
-            Promise.resolve().then(() => {
-                refresh();
-            });
-
             const convert: CConvert = (money, target, base, date) => {
                 const state = get();
                 const dateStr = dayjs(date).format("YYYY-MM-DD");

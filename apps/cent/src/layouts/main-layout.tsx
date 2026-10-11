@@ -1,108 +1,78 @@
 import { Toaster } from "@glink25/toast";
-import { useEffect, useRef } from "react";
+import { useEffect } from "react";
 import { Outlet } from "react-router";
-import { BillEditorProvider } from "@/components/bill-editor";
-import { BillInfoProvider } from "@/components/bill-info";
-import { TagListProvider } from "@/components/bill-tag";
-import BookGuide from "@/components/book";
-import { BookConfirmProvider } from "@/components/book/util";
-import { BudgetEditProvider, BudgetProvider } from "@/components/budget";
-import { BudgetDetailProvider } from "@/components/budget/detail";
-import { CategoryListProvider } from "@/components/category";
-import { CurrencyListProvider } from "@/components/currency";
-import { ImportPreviewProvider } from "@/components/data-manager/preview-form";
-import { ModalProvider } from "@/components/modal";
-import Navigation from "@/components/navigation";
-import {
-    ScheduledEditProvider,
-    ScheduledProvider,
-} from "@/components/scheduled";
-import { Settings } from "@/components/settings";
-import { SortableListProvider } from "@/components/sortable";
-import { SortableListWithEnableProvider } from "@/components/sortable/enable";
-import { SortableGroupProvider } from "@/components/sortable/group";
-import { TooltipProvider } from "@/components/ui/tooltip";
-import { WidgetEditProvider } from "@/components/widget/edit-form";
-import { useInitPreset } from "@/hooks/use-preset";
-import {
-    useQuickEntryByClipboard,
-    useQuickEntryByRelayr,
-    useQuickGoAdd,
-} from "@/hooks/use-quick-entry";
-import { useScheduled } from "@/hooks/use-scheduled";
-import { ThemeProvider } from "@/hooks/use-theme";
-import { useUrlHandler } from "@/hooks/use-url-handler";
-import { measure } from "@/measurement";
-import { useMeasurementUsageSnapshot } from "@/measurement/usage-snapshot";
-import { useLedgerStore } from "@/store/ledger";
-import { usePreferenceStore } from "@/store/preference";
-import { useUserStore } from "@/store/user";
-import { startBackgroundPredict } from "@/utils/predict";
-import { ZenDialogProvider } from "@/zen";
+import { useStore } from "zustand";
+import { AccountManagerProvider } from "../components/accounting/account-manager";
+import { AccountingBookProvider } from "../components/accounting/book-manager";
+import { FormError } from "../components/accounting/shared";
+import { BillEditorProvider } from "../components/bill-editor";
+import { TransactionInfoProvider } from "../components/bill-info/transaction";
+import { TagListProvider } from "../components/bill-tag";
+import { CurrencyListProvider } from "../components/currency";
+import { ModalProvider } from "../components/modal";
+import Navigation from "../components/navigation";
+import { Settings } from "../components/settings";
+import { Button } from "../components/ui/button";
+import { TooltipProvider } from "../components/ui/tooltip";
+import { useAccountingSync } from "../hooks/use-accounting-sync";
+import { ThemeProvider } from "../hooks/use-theme";
+import { accountingStore } from "../store/accounting";
 
-let zenStatusMeasured = false;
-
+const ACTIVE_BOOK_KEY = "cent-accounting-active-book";
 export default function MainLayout() {
-    useMeasurementUsageSnapshot();
-    useQuickGoAdd();
-    useQuickEntryByClipboard();
-    useQuickEntryByRelayr();
-    useUrlHandler(); // 处理标准 URL 链接唤起
-
-    const zenEnabled = useLedgerStore((state) => {
-        if (!state.infos) return undefined;
-        const userId = useUserStore.getState().id;
-        return Boolean(state.infos.meta.personal?.[userId]?.zen?.enabled);
-    });
+    useAccountingSync();
+    const { ready, current, busy, error, initialize } =
+        useStore(accountingStore);
     useEffect(() => {
-        if (zenEnabled === undefined || zenStatusMeasured) return;
-        zenStatusMeasured = true;
-        measure("zen_status", { enabled: zenEnabled });
-    }, [zenEnabled]);
-
+        let preferred: string | undefined;
+        try {
+            preferred = localStorage.getItem(ACTIVE_BOOK_KEY) ?? undefined;
+        } catch {}
+        void initialize(preferred).catch(() => {});
+    }, [initialize]);
+    const bookId = current?.book.id;
     useEffect(() => {
-        // predict
-        if (usePreferenceStore.getState().smartPredict) {
-            startBackgroundPredict();
-        }
-    }, []);
-
-    // 自动周期记账
-    const { applyScheduled } = useScheduled();
-    const applyScheduledRef = useRef(applyScheduled);
-    applyScheduledRef.current = applyScheduled;
-    useEffect(() => {
-        applyScheduledRef.current();
-    }, []);
-
-    useInitPreset();
-
+        if (!bookId) return;
+        try {
+            localStorage.setItem(ACTIVE_BOOK_KEY, bookId);
+        } catch {}
+    }, [bookId]);
     return (
         <ThemeProvider>
             <TooltipProvider>
-                <Navigation />
-                <div className="w-full h-full sm:pl-18">
-                    <Outlet />
-                </div>
+                {ready && current ? (
+                    <>
+                        <Navigation />
+                        <div className="w-full h-full sm:pl-18">
+                            <Outlet />
+                        </div>
+                    </>
+                ) : (
+                    <div className="h-full flex flex-col gap-4 items-center justify-center">
+                        <output>正在打开账本…</output>
+                        <FormError error={error} />
+                        {error && (
+                            <Button
+                                disabled={busy}
+                                onClick={() =>
+                                    void accountingStore
+                                        .getState()
+                                        .initialize()
+                                        .catch(() => {})
+                                }
+                            >
+                                重新加载
+                            </Button>
+                        )}
+                    </div>
+                )}
                 <BillEditorProvider />
-                <BillInfoProvider />
-                <SortableListProvider />
-                <SortableListWithEnableProvider />
-                <SortableGroupProvider />
-                <Settings />
-                <ImportPreviewProvider />
-                <WidgetEditProvider />
-                <CurrencyListProvider />
-                <BookGuide />
-                <BookConfirmProvider />
-                <BudgetProvider />
-                <BudgetEditProvider />
-                <BudgetDetailProvider />
-                <ScheduledProvider />
-                <ScheduledEditProvider />
                 <TagListProvider />
-                <CategoryListProvider />
-                <ZenDialogProvider />
+                <TransactionInfoProvider />
+                <Settings />
+                <AccountManagerProvider />
+                <CurrencyListProvider />
+                <AccountingBookProvider />
                 <ModalProvider />
                 <Toaster />
             </TooltipProvider>

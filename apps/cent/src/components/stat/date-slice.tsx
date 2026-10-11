@@ -1,8 +1,10 @@
-import dayjs, { type Dayjs } from "dayjs";
+import type { Dayjs } from "dayjs";
 import { type ReactNode, useMemo, useState } from "react";
 import { DateInput } from "@/components/bill-filter/form";
 import { useIntl } from "@/locale";
 import { cn } from "@/utils";
+import { useBookTimeZone } from "../../hooks/use-time-zone";
+import { zonedDate } from "../../utils/time";
 import { Button } from "../ui/button";
 
 type DateSliceId = string; // weekly|YYYY
@@ -38,9 +40,10 @@ function calcDateSlice(
     range: [number, number],
     viewType: "weekly" | "monthly" | "yearly",
     t: ReturnType<typeof useIntl>,
+    timeZone: string,
 ) {
-    const START = dayjs.unix(range[0] / 1000);
-    const END = dayjs.unix(range[1] / 1000);
+    const START = zonedDate(range[0], timeZone);
+    const END = zonedDate(range[1], timeZone);
 
     const labels = (() => {
         if (viewType === "weekly") {
@@ -85,7 +88,7 @@ function calcDateSlice(
     let i = 0;
     while (true && i < (max ?? Infinity)) {
         i += 1;
-        end = start.subtract(1, "ms");
+        end = zonedDate(start.valueOf() - 1, timeZone);
         start = end.startOf(unit);
         if (end.isAfter(START)) {
             s.push({
@@ -212,16 +215,20 @@ export function useDateSliced({
     selectCustomSliceWhenInitial?: boolean;
 }) {
     const t = useIntl();
+    const timeZone = useBookTimeZone();
     const viewSlices = useMemo(
         () =>
             Object.fromEntries(
                 StaticViews.map(({ id: viewType }) => {
                     return viewType === "custom"
                         ? undefined
-                        : [viewType, calcDateSlice(range, viewType, t)];
+                        : [
+                              viewType,
+                              calcDateSlice(range, viewType, t, timeZone),
+                          ];
                 }).filter((v) => v !== undefined),
             ) as Record<ViewType, DateSlice[]>,
-        [range, t],
+        [range, t, timeZone],
     );
 
     const [sliceId, setSliceId] = useState<string | undefined>(

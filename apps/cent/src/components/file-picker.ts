@@ -26,6 +26,7 @@ export const showFilePicker = ({ accept, multiple }: Partial<PickerParam>) => {
             res(Array.from(picker.files));
         });
         picker.addEventListener("error", rej);
+        picker.addEventListener("cancel", () => res([]));
         picker.click();
     });
 };

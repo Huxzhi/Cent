@@ -39,3 +39,12 @@ src-tauri/target
 src-tauri/gen
 src-tauri/binaries
 .pnpm-store
+
+# Local test files and output
+**/tests/
+**/__tests__/
+*.test.*
+*.spec.*
+coverage/
+playwright-report/
+test-results/

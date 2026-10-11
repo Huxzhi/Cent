@@ -1,5 +1,5 @@
 import { useIntl, useLocale } from "@/locale";
-import { locales } from "@/locale/utils";
+import { type LocaleName, locales } from "@/locale/utils";
 import {
     Select,
     SelectContent,
@@ -11,6 +11,7 @@ import {
 export default function LanguageSettingsItem() {
     const t = useIntl();
     const { locale, setLocale } = useLocale();
+    const [changing, setChanging] = useState(false);
     return (
         <div className="w-full px-4 py-1 text-sm">
             <div className="w-full px-4 flex justify-between items-center text-sm font-medium">
@@ -20,11 +21,11 @@ export default function LanguageSettingsItem() {
                 </div>
                 <Select
                     value={locale}
-                    onValueChange={(v) => {
-                        setLocale(v as any);
-                        setTimeout(() => {
-                            location.reload();
-                        }, 10);
+                    disabled={changing}
+                    onValueChange={async (v) => {
+                        setChanging(true);
+                        await setLocale(v as LocaleName);
+                        location.reload();
                     }}
                 >
                     <SelectTrigger className="w-fit text-xs rounded-sm">
@@ -42,3 +43,5 @@ export default function LanguageSettingsItem() {
         </div>
     );
 }
+
+import { useState } from "react";

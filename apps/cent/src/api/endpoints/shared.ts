@@ -26,8 +26,8 @@ export function createBookEndpoint({
         logout: async () => {},
         getUserInfo: async () => user,
         getCollaborators: async () => [user],
-        fetchAllBooks: () =>
-            books.provider ? books.fetchRemoteBooks() : books.listBooks(),
+        // Routine book discovery is local; only the explicit remote picker lists DAV/GitHub.
+        fetchAllBooks: () => books.listBooks(),
         createBook: unsupported,
         initBook: unsupported,
         batch: unsupported,

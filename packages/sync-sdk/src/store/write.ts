@@ -2,11 +2,17 @@ import {
     type Change,
     type PutManyResult,
     type RecordInput,
+    type StateVersion,
     SyncError,
     type SyncState,
 } from "../types";
 import { assert } from "../utils/codec";
 import { createId } from "../utils/id";
+import {
+    isStateVersion,
+    sameStateVersion,
+    stateVersion,
+} from "../utils/version";
 import type { RecordChanges } from "./changes";
 import { type DatabaseConnection, localKey } from "./database";
 import { isPending, toEntry } from "./entry";
@@ -18,8 +24,8 @@ interface LocalWriteOptions {
 /** A conflict decision must be tied to the snapshot shown to its caller. */
 export type WriteOptions = LocalWriteOptions &
     (
-        | { resolve?: false; expectedRevision?: number }
-        | { resolve: true; expectedRevision: number }
+        | { resolve?: false; expectedVersion?: StateVersion }
+        | { resolve: true; expectedVersion: StateVersion }
     );
 
 /** Allocate missing IDs once per attempt, then commit the complete input atomically. */
@@ -52,7 +58,7 @@ export async function putRecords<T>(
                 generated.add(id);
                 return id;
             });
-            const revision = await batch(
+            const version = await batch(
                 connection,
                 notifications,
                 records.map((record, index) => ({
@@ -64,7 +70,7 @@ export async function putRecords<T>(
                 capturedOptions,
                 generated,
             );
-            return { ids, revision };
+            return { ids, version };
         } catch (error) {
             if (
                 !(error instanceof SyncError) ||
@@ -88,12 +94,11 @@ export async function batch(
     validateChanges(changes);
     if (
         capturedOptions.resolve &&
-        (!Number.isSafeInteger(capturedOptions.expectedRevision) ||
-            capturedOptions.expectedRevision < 0)
+        !isStateVersion(capturedOptions.expectedVersion)
     )
         throw new SyncError(
             "LOCAL_CONFLICT",
-            "Conflict resolution requires the revision shown to the user; reload before saving",
+            "Conflict resolution requires the displayed writerSeq and repoSeq; reload before saving",
         );
     const tx = (await connection.db).transaction(
         ["records", "config"],
@@ -104,8 +109,9 @@ export async function batch(
             .objectStore("config")
             .get("syncState")) as SyncState;
         if (
-            capturedOptions.expectedRevision !== undefined &&
-            capturedOptions.expectedRevision !== state.revision
+            capturedOptions.expectedVersion !== undefined &&
+            (!isStateVersion(capturedOptions.expectedVersion) ||
+                !sameStateVersion(capturedOptions.expectedVersion, state))
         )
             throw new SyncError(
                 "LOCAL_CONFLICT",
@@ -147,7 +153,6 @@ export async function batch(
             await tx
                 .objectStore("config")
                 .put({ key: localKey(entry.key), value: entry.value });
-        state.revision++;
         await tx.objectStore("config").put(state);
         await tx.done;
         notifications.emit(
@@ -156,9 +161,9 @@ export async function batch(
                 collection: change.collection,
                 id: change.recordId,
             })),
-            state.revision,
+            stateVersion(state),
         );
-        return state.revision;
+        return stateVersion(state);
     } catch (error) {
         try {
             tx.abort();

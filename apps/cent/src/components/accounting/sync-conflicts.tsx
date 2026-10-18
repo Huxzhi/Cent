@@ -60,7 +60,7 @@ export default function AccountingSyncConflicts() {
                                                           type: "put",
                                                           value: choice.value,
                                                       },
-                                                conflict.revision,
+                                                conflict.version,
                                             );
                                             await refresh();
                                         })

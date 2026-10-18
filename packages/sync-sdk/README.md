@@ -50,15 +50,19 @@ remote 可省略，通过 sync.setRemote 稍后设置。WebDAV 配置为 {provid
 
 每次成功的非空业务修改提交把 writerSeq 加1；单条写入、删除、批量写入、业务批量导入和冲突解决均按一次事务计数，同事务所有记录共用新序号，不按条目数递增。业务批量导入使用 store.putMany 或 store.batch：一次提交1200条记录也只加1，多次调用则各加1。回滚、仅配置写入、空批次、导出、远端同步导入和上传确认不增加 writerSeq；远端导入保留原 writerId/writerSeq。
 
+本地不保存第三个修订计数。所有乐观保存、冲突确认、分页游标和变化通知统一使用 StateVersion = {writerSeq, repoSeq}。writerSeq 只因非空本地业务提交增加；repoSeq 只在完整导入较新远端发布（含本设备上传确认）后前进。应用配置、空批次、重放和同步活动标记不改变这对序号。
+
+读取快照后使用 stateVersion(state) 取得独立副本，再通过 store.batch(changes, {expectedVersion}) 或 store.put/putMany/delete 的同名选项保存。SDK 在同一个 IndexedDB 读写事务内同时比较两个序号；任一不同即报 LOCAL_CONFLICT。不能仅依靠广播刷新，也不能在用户确认后读取新序号替代原快照。写入结果返回 version: StateVersion；batch 直接返回 StateVersion。查询游标和 onChange 事件的 version 同样是这对序号，不是新的计数器。
+
 本地没有独立 uploadedSeq。每次上传和竞争重试都先重新读取远端 Manifest，取当前 writerId 所有分片的最大 toSeq 为上次已发布序号 S。完整导入后捕获本地 writerSeq=N，仅上传本设备 S < writerSeq <= N 的当前记录。离线判断使用已导入 Manifest 缓存，不把尚未成功下载和导入的远端引用提前确认为已同步。
 
 应用配置通过 sdk.config.get/set 或 store.batch 的 local 选项保存，键为 local/<key>。远端绑定只在 syncState.remote；config.bindRemote 支持原子首次绑定，不允许自动换到其它远端。
 
 syncState.remote.identity 保存完整的远端标识，remote.path 保存相对于宿主配置目录的账本路径。完整路径不需要编码进 IndexedDB 数据库名；宿主可使用独立的短 ID 命名本地库。后续同步只更新 identity 时仍保留已有的 provider 和 path，不能把已绑定库换到另一路径。
 
-同步操作按数据库名使用 Web Locks 排他执行，并在持锁后通过配置事务把 syncState.isSyncing 设为 true，结束时在 finally 中设回 false。同库其它页面的 config.getState().isSyncing 和 sync.getStatus().running 读取同一状态；状态写入不推进 writerSeq/repoSeq/revision，也不发送业务变化通知。本地业务编辑可以在同步期间继续提交，保留该状态。
+同步操作按数据库名使用 Web Locks 排他执行，并在持锁后通过配置事务把 syncState.isSyncing 设为 true，结束时在 finally 中设回 false。同库其它页面的 config.getState().isSyncing 和 sync.getStatus().running 读取同一状态；状态写入不推进 writerSeq/repoSeq，也不发送业务变化通知。本地业务编辑可以在同步期间继续提交，保留该状态。
 
-布尔字段用于共享状态，实际互斥由 Web Locks 保证。页面关闭后浏览器释放锁；如果留下 true，下一次获得锁的操作会接管并在结束时清理，避免永久卡住。同步失败或状态清理失败会向调用方报错，可再次调用恢复。初始化仅补齐缺失的默认字段，不重置正在运行的 true；数据库结构及远端协议不变。自定义 SyncOptions.lock 必须同样按库名提供跨页面排他能力。sync、pull、cleanup、getWriters 及两种 files 操作复用此机制；手动网络传输跨多个函数的整体协调仍由宿主负责。
+布尔字段用于共享状态，实际互斥由 Web Locks 保证。页面关闭后浏览器释放锁；如果留下 true，下一次获得锁的操作会接管并在结束时清理，避免永久卡住。同步失败或状态清理失败会向调用方报错，可再次调用恢复。初始化保留已有设备标识、双序号、远端绑定与发布状态，按当前支持的字段保存同步状态，不重置正在运行的 true；数据库结构及远端协议不变。自定义 SyncOptions.lock 必须同样按库名提供跨页面排他能力。sync、pull、cleanup、getWriters 及两种 files 操作复用此机制；手动网络传输跨多个函数的整体协调仍由宿主负责。
 
 ## 条目格式
 
@@ -74,13 +78,13 @@ syncState.remote.identity 保存完整的远端标识，remote.path 保存相对
 
 writerId/writerSeq 表示修改来源，远端导入保持原样。业务 JSON 存在 value 中，业务自己的 id、collection、time、\_sync 不会覆盖 SDK 字段；**create_at、**update_at 仍属于业务数据。
 
-默认按 ID 查询。orderBy:"time" 使用业务索引 [collection,value.time,id]；不含数值 time 的记录仍能按 ID 查询。查询支持方向、范围和游标，视图版本改变后旧游标失效。
+默认按 ID 查询。orderBy:"time" 使用业务索引 [collection,value.time,id]；不含数值 time 的记录仍能按 ID 查询。查询支持方向、范围和游标，writerSeq 或 repoSeq 改变后旧游标失效，单纯本地配置变化不会使游标失效。
 
 ## Manifest 与分片
 
 完整 sync 在首次读取 manifest.json 返回404时自动创建文件，无需手动建文件：有待上传数据时直接创建首次发布的 Manifest；空数据集也创建包含 name 的空 Manifest（repoSeq=0、files=[]）。首次创建和更新都使用适配器的版本条件保护：标准 WebDAV 使用 If-None-Match:*/If-Match；无可用强 ETag 时自动使用服务器文件锁和内容哈希校验；遇到创建竞争重新读取并导入最新远端，不覆盖其它设备的发布。pull 仍为只读，不创建文件。如果本地已确认仓库版本大于0而远端 Manifest 丢失，继续报告 REMOTE_HISTORY_LOST，不把已同步仓库重置为空。
 
-新建 Manifest 包含 name，读取旧的无名称 Manifest 仍受支持；名称和垃圾清理元信息的变化可在 repoSeq 不变时刷新本地 Manifest 缓存，不推进 writerSeq 或业务 revision。
+新建 Manifest 包含 name，读取旧的无名称 Manifest 仍受支持；名称和垃圾清理元信息的变化可在 repoSeq 不变时刷新本地 Manifest 缓存，不推进 writerSeq/repoSeq。
 
 ```json
 {
@@ -137,7 +141,7 @@ try {
 宿主为用户提供“保留本地”“采用远端”“手动合并”三个选项。下面的 choose 由宿主实现：展示两个候选并等待用户确认，分别返回 local.value、remote.value 或用户编辑后的完整业务值；返回 null 表示确认删除，取消时应抛出异常并退出保存流程。
 
 ```ts
-import type { RecordVersion } from '@glink25/sync-sdk'
+import { stateVersion, type RecordVersion } from '@glink25/sync-sdk'
 
 async function resolveConflict(
   collection: string,
@@ -147,7 +151,7 @@ async function resolveConflict(
     remote: RecordVersion,
   ) => Promise<unknown | null>,
 ) {
-  // 先刷新远端，再从同一个本地快照取得候选和 revision。
+  // 先刷新远端，再从同一个本地快照取得候选和双序号。
   await sdk.sync.pull()
   const { state, records } = await sdk.store.snapshot()
   const record = records.find(r => r.collection === collection && r.id === id)
@@ -155,7 +159,7 @@ async function resolveConflict(
 
   const [local, remote] = record._sync.versions
   const value = await choose(local, remote)
-  const options = { resolve: true as const, expectedRevision: state.revision }
+  const options = { resolve: true as const, expectedVersion: stateVersion(state) }
   if (value === null) {
     await sdk.store.delete(collection, id, options)
   } else {
@@ -165,9 +169,9 @@ async function resolveConflict(
 }
 ```
 
-resolve: true 必须同时提供 expectedRevision，使用展示候选时的快照版本，不能在用户确认后重新读取 revision 再强行保存。缺少版本号，或等待用户期间本地业务数据变化、导入了新的远端数据时，保存会报 LOCAL_CONFLICT；宿主应重新加载候选并让用户再次确认。
+resolve: true 必须同时提供 expectedVersion，使用展示候选时的快照版本，不能在用户确认后重新读取双序号再强行保存。缺少有效的双序号快照，或等待用户期间本地业务数据变化、导入了新的远端数据时，保存会报 LOCAL_CONFLICT；宿主应重新加载候选并让用户再次确认。
 
-解决结果作为本设备一次新的业务事务保存，writerSeq 加1，并以当前已导入的 repoSeq 为新基线；即使选择远端值，也通过新事务明确发布该选择。保存后仍需同步，若此时远端再次修改同一记录，会重新产生 RECORD_CONFLICT，宿主应刷新冲突列表继续处理。若还有其它未解决记录，整个批次仍暂停上传；可逐条解决后重试，或从同一快照收集全部选择，再通过 store.batch(changes, { resolve: true, expectedRevision }) 一次原子提交。
+解决结果作为本设备一次新的业务事务保存，writerSeq 加1，并以当前已导入的 repoSeq 为新基线；即使选择远端值，也通过新事务明确发布该选择。保存后仍需同步，若此时远端再次修改同一记录，会重新产生 RECORD_CONFLICT，宿主应刷新冲突列表继续处理。若还有其它未解决记录，整个批次仍暂停上传；可逐条解决后重试，或从同一快照收集全部选择，再通过 store.batch(changes, { resolve: true, expectedVersion }) 一次原子提交。
 
 ## WebDAV / OpenList
 

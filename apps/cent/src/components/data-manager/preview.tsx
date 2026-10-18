@@ -1,3 +1,4 @@
+import { type StateVersion, sameStateVersion } from "@glink25/sync-sdk";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useMemo, useRef, useState } from "react";
 import { useStore } from "zustand";
@@ -21,7 +22,7 @@ export type PreviewState = {
     paymentAccountId?: string;
     paymentAccountIds?: Record<string, string>;
     bookId?: string;
-    revision?: number;
+    version?: StateVersion;
 };
 export function PreviewForm({
     edit,
@@ -52,7 +53,8 @@ export function PreviewForm({
         try {
             if (
                 current.book.id !== edit.bookId ||
-                current.book.revision !== edit.revision
+                !edit.version ||
+                !sameStateVersion(current.book.version, edit.version)
             )
                 throw new Error(t("accounting-import-book-changed"));
             return {

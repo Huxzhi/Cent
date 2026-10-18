@@ -18,6 +18,7 @@ import {
     type SyncState,
 } from "../types";
 import { assert, canonical } from "../utils/codec";
+import { stateVersion } from "../utils/version";
 import { assertManifestAdvance, validateManifest } from "./remote";
 export async function exportPending(
     connection: DatabaseConnection,
@@ -59,7 +60,6 @@ export async function exportPending(
         writerId: state.writerId,
         writerSeq: state.writerSeq,
         repoSeq: state.repoSeq,
-        revision: state.revision,
         records,
     };
 }
@@ -242,13 +242,12 @@ export async function importManifest(
             }
         }
         state.repoSeq = manifest.repoSeq;
-        state.revision++;
         await tx.objectStore("config").put(state);
         await tx.done;
         notifications.emit(
             own > lower ? "local" : "remote",
             [...changed.values()],
-            state.revision,
+            stateVersion(state),
         );
     } catch (error) {
         try {

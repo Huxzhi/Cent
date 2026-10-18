@@ -3,9 +3,12 @@ import {
     createSyncSDK,
     type RemoteBinding,
     type RemoteTransport,
+    type StateVersion,
     type StoredRecord,
     SyncError,
     type SyncOptions,
+    sameStateVersion,
+    stateVersion,
 } from "@glink25/sync-sdk";
 import { isEqual } from "lodash-es";
 import {
@@ -68,15 +71,19 @@ const matchesRemote = (
 export class AccountingSyncConflictError extends Error {
     readonly bookId: string;
     readonly records: StoredRecord[];
-    readonly revision: number;
-    constructor(bookId: string, records: StoredRecord[], revision: number) {
+    readonly version: StateVersion;
+    constructor(
+        bookId: string,
+        records: StoredRecord[],
+        version: StateVersion,
+    ) {
         super(
             "账本存在并发修改，请逐项选择保留的完整版本。解决前暂停显示账单和统计。",
         );
         this.name = "AccountingSyncConflictError";
         this.bookId = bookId;
         this.records = records;
-        this.revision = revision;
+        this.version = stateVersion(version);
     }
 }
 export class AccountingProjectionError extends Error {
@@ -155,9 +162,11 @@ export function createAccountingBooks(
                     infoOf(await handle(id).store.get(BOOK, "info")).name,
             });
             handles.set(id, sdk);
-            sdk.onChange(({ source }) =>
-                notify(id, source === "remote" ? "sync" : source),
-            );
+            sdk.onChange(({ source }) => {
+                // One refresh after the complete sync, rather than one per imported file.
+                if (source === "remote" && jobs.has(id)) return;
+                notify(id, source === "remote" ? "sync" : source);
+            });
         }
         return sdk;
     };
@@ -178,7 +187,7 @@ export function createAccountingBooks(
             throw new AccountingSyncConflictError(
                 id,
                 conflicts,
-                state.revision,
+                stateVersion(state),
             );
         const info = infoOf(
             records.find((r) => r.collection === BOOK && r.id === "info"),
@@ -189,7 +198,7 @@ export function createAccountingBooks(
             book: {
                 id,
                 name: info.name,
-                revision: state.revision,
+                version: stateVersion(state),
                 createdAt: info.createdAt,
                 updatedAt: Math.max(
                     info.createdAt,
@@ -224,7 +233,7 @@ export function createAccountingBooks(
             ...items,
         ];
         await sdk.store.batch(changes, {
-            expectedRevision: 0,
+            expectedVersion: { writerSeq: 0, repoSeq: 0 },
             local: [
                 {
                     key: "updatedAt",
@@ -257,7 +266,7 @@ export function createAccountingBooks(
                 result.set(id, {
                     id,
                     name: info.name,
-                    revision: (await sdk.config.getState()).revision,
+                    version: stateVersion(await sdk.config.getState()),
                     createdAt: info.createdAt,
                     updatedAt: Math.max(
                         info.createdAt,
@@ -297,22 +306,27 @@ export function createAccountingBooks(
                     error = new AccountingSyncConflictError(
                         id,
                         records.filter((r) => r._sync.conflicted),
-                        state.revision,
+                        stateVersion(state),
                     );
                 }
                 syncError = error;
                 throw error;
-            } finally {
-                notify(id, "sync");
             }
             signal?.throwIfAborted();
             return read(id);
-        })().finally(() => jobs.delete(id));
+        })().finally(() => {
+            jobs.delete(id);
+            notify(id, "sync");
+        });
         jobs.set(id, job);
         return job;
     };
     const syncAll = async (signal?: AbortSignal) => {
-        if (!remote) return;
+        if (
+            !remote ||
+            (typeof navigator !== "undefined" && navigator.onLine === false)
+        )
+            return;
         for (const book of await listBooks()) {
             signal?.throwIfAborted();
             const binding = (await handle(book.id).config.getState()).remote;
@@ -320,14 +334,19 @@ export function createAccountingBooks(
                 await sync(book.id, undefined, signal);
         }
     };
-    const scheduler = new Scheduler(syncAll, 200);
+    const scheduler = new Scheduler(syncAll, 1000);
     scheduler.onProcess((job) => {
         void job.catch((error) => {
             syncError = error;
         });
     });
     const changed = (book: LoadedAccountingBook) => {
-        if (options.autoSync && remote && book.remoteId)
+        if (
+            options.autoSync &&
+            remote &&
+            book.remoteId &&
+            !(typeof navigator !== "undefined" && navigator.onLine === false)
+        )
             void scheduler.schedule().catch(() => {});
         return book;
     };
@@ -367,7 +386,7 @@ export function createAccountingBooks(
                         name: bookName.trim(),
                         createdAt: now,
                         updatedAt: now,
-                        revision: 0,
+                        version: { writerSeq: 0, repoSeq: 0 },
                     },
                     data,
                 ),
@@ -375,19 +394,20 @@ export function createAccountingBooks(
         },
         async saveBook(
             id: string,
-            revision: number,
+            version: StateVersion,
             input: AccountingData,
             now: number,
         ) {
+            version = stateVersion(version);
             if (!Number.isSafeInteger(now) || now < 0)
                 throw new Error("账本时间无效。");
             const previous = await openBook(id);
-            if (previous.book.revision !== revision)
+            if (!sameStateVersion(previous.book.version, version))
                 throw new AccountingConflictError();
             const data = validateAccountingData(input, now);
             const sdk = handle(id);
             const snapshot = await sdk.store.snapshot();
-            if (snapshot.state.revision !== revision)
+            if (!sameStateVersion(snapshot.state, version))
                 throw new AccountingConflictError();
             const changes: Change[] = [];
             const meta = json(toAccountingMeta(data));
@@ -397,7 +417,7 @@ export function createAccountingBooks(
                 ...ledgerRecordChanges(snapshot.records, data.transactions),
             );
             await sdk.store.batch(changes, {
-                expectedRevision: revision,
+                expectedVersion: version,
                 local: [
                     {
                         key: "updatedAt",
@@ -460,7 +480,7 @@ export function createAccountingBooks(
                     binding?.path === remoteId &&
                     matchesRemote(binding, target)
                 )
-                    return sync(b.id);
+                    return changed(await openBook(b.id));
             }
             // Deterministic local ID avoids duplicate imports racing in separate tabs.
             const id = await remoteBookId(transport.identity);
@@ -528,7 +548,7 @@ export function createAccountingBooks(
             const snapshot = await handle(id).store.snapshot();
             return {
                 records: snapshot.records.filter((r) => r._sync.conflicted),
-                revision: snapshot.state.revision,
+                version: stateVersion(snapshot.state),
             };
         },
         async resolveConflict(
@@ -542,11 +562,12 @@ export function createAccountingBooks(
                 | {
                       type: "delete";
                   },
-            revision: number,
+            version: StateVersion,
         ) {
+            version = stateVersion(version);
             const sdk = handle(id);
             const snapshot = await sdk.store.snapshot();
-            if (snapshot.state.revision !== revision)
+            if (!sameStateVersion(snapshot.state, version))
                 throw new AccountingConflictError();
             const chosen: Change =
                 choice.type === "put"
@@ -587,7 +608,7 @@ export function createAccountingBooks(
             }
             await sdk.store.batch([...changes.values()], {
                 resolve: true,
-                expectedRevision: revision,
+                expectedVersion: version,
             });
         },
         getStore: (id: string) => handle(id).store,

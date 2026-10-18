@@ -44,10 +44,23 @@ export function openDatabase(name: string, blocking: () => void) {
                 writerSeq: 0,
                 repoSeq: 0,
                 isSyncing: false,
-                revision: 0,
             });
-        else if (state.isSyncing === undefined)
-            await tx.store.put({ ...state, isSyncing: false });
+        else {
+            // Persist only the supported state fields while preserving the database identity and progress.
+            const current: SyncState = {
+                key: "syncState",
+                writerId: state.writerId,
+                writerSeq: state.writerSeq,
+                repoSeq: state.repoSeq,
+                isSyncing: state.isSyncing ?? false,
+                ...(state.remote ? { remote: state.remote } : {}),
+                ...(state.publication
+                    ? { publication: state.publication }
+                    : {}),
+                ...(state.manifest ? { manifest: state.manifest } : {}),
+            };
+            await tx.store.put(current);
+        }
         await tx.done;
         return db;
     });

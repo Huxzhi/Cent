@@ -1,3 +1,5 @@
+import type { StateVersion } from "../types";
+import { isStateVersion, stateVersion } from "../utils/version";
 export interface RecordKey {
     collection: string;
     id: string;
@@ -7,8 +9,8 @@ export interface ChangeEvent {
     /** external means another connection to this database (usually another tab). */
     source: "local" | "remote" | "external";
     keys: RecordKey[];
-    /** Committed database revision; a reload hint, not a delivery cursor. */
-    revision: number;
+    /** Committed sequence pair; a reload hint, not a delivery cursor. */
+    version: StateVersion;
 }
 
 export type ChangeListener = (event: ChangeEvent) => void | Promise<void>;
@@ -33,9 +35,8 @@ export class RecordChanges {
                 if (!data || typeof data !== "object") return;
                 const message = data as Record<string, unknown>;
                 if (
-                    message.version !== 1 ||
-                    !Number.isSafeInteger(message.revision) ||
-                    (message.revision as number) < 0 ||
+                    message.protocol !== 1 ||
+                    !isStateVersion(message.version) ||
                     !Array.isArray(message.keys) ||
                     !message.keys.length ||
                     !message.keys.every(
@@ -48,7 +49,7 @@ export class RecordChanges {
                     return;
                 this.dispatch({
                     source: "external",
-                    revision: message.revision as number,
+                    version: stateVersion(message.version),
                     keys: message.keys.map(({ collection, id }) => ({
                         collection,
                         id,
@@ -69,7 +70,7 @@ export class RecordChanges {
         };
     }
 
-    emit(source: "local" | "remote", keys: RecordKey[], revision: number) {
+    emit(source: "local" | "remote", keys: RecordKey[], version: StateVersion) {
         if (this.closed || !keys.length) return;
         const unique = [
             ...new Map(
@@ -81,9 +82,13 @@ export class RecordChanges {
         ];
         // Queue the cross-tab hint before invoking user code, which may close us.
         try {
-            this.channel?.postMessage({ version: 1, keys: unique, revision });
+            this.channel?.postMessage({
+                protocol: 1,
+                keys: unique,
+                version: stateVersion(version),
+            });
         } catch {}
-        this.dispatch({ source, keys: unique, revision });
+        this.dispatch({ source, keys: unique, version: stateVersion(version) });
     }
 
     private dispatch(event: ChangeEvent) {

@@ -47,7 +47,9 @@ export interface AccountingStore {
     current?: LoadedAccountingBook;
     ready: boolean;
     busy: boolean;
+    syncing: boolean;
     error?: string;
+    syncError?: string;
     conflict?: AccountingSyncConflictError;
     initialize(
         preferredBookId?: string,
@@ -77,7 +79,7 @@ export interface AccountingStore {
     ): Promise<void>;
 }
 
-/** 只通过账本适配层读写；串行执行操作，写入成功后才更新可见状态。 */
+/** 本地事务串行提交并立即显示；网络同步独立运行，完成后读取最新本地快照。 */
 export function createAccountingStore(
     booksService: Pick<
         AccountingBooks,
@@ -85,11 +87,17 @@ export function createAccountingStore(
     >,
 ) {
     let queue: Promise<void> = Promise.resolve();
+    let syncQueue: Promise<void> = Promise.resolve();
+    let syncCount = 0;
+    let selection = 0;
     let initialization: Promise<void> | undefined;
     return createStore<AccountingStore>()((set, get) => {
-        const run = (operation: () => Promise<void>): Promise<void> => {
+        const run = (
+            operation: () => Promise<void>,
+            background = false,
+        ): Promise<void> => {
             const next = queue.then(async () => {
-                set({ busy: true, error: undefined });
+                if (!background) set({ busy: true, error: undefined });
                 try {
                     await operation();
                 } catch (error) {
@@ -105,15 +113,20 @@ export function createAccountingStore(
                             ready: true,
                             conflict: error,
                         });
-                    set({
-                        error:
-                            error instanceof Error
-                                ? error.message
-                                : "账本操作失败，请重试。",
-                    });
+                    if (
+                        !background ||
+                        error instanceof AccountingProjectionError ||
+                        error instanceof AccountingSyncConflictError
+                    )
+                        set({
+                            error:
+                                error instanceof Error
+                                    ? error.message
+                                    : "账本操作失败，请重试。",
+                        });
                     throw error;
                 } finally {
-                    set({ busy: false });
+                    if (!background) set({ busy: false });
                 }
             });
             queue = next.catch(() => {});
@@ -122,6 +135,9 @@ export function createAccountingStore(
         const apply = (current: LoadedAccountingBook) =>
             set({
                 conflict: undefined,
+                ...(get().current?.book.id !== current.book.id
+                    ? { syncError: undefined }
+                    : {}),
                 current: {
                     ...current,
                     data: withTradingHierarchy(
@@ -135,10 +151,26 @@ export function createAccountingStore(
                       )
                     : [...get().books, current.book],
             });
+        const refreshAfterSync = (id: string, requestedSelection: number) =>
+            run(async () => {
+                if (selection !== requestedSelection) return;
+                try {
+                    const books = await booksService.listBooks();
+                    const current = await booksService.openBook(id);
+                    if (selection !== requestedSelection) return;
+                    if (get().current?.book.id !== id) selection++;
+                    set({ books });
+                    apply(current);
+                } catch (error) {
+                    // A late response for a book the user left cannot clear the new book.
+                    if (selection === requestedSelection) throw error;
+                }
+            }, true);
         return {
             books: [],
             ready: false,
             busy: false,
+            syncing: false,
             initialize(preferredBookId, options = {}) {
                 if (get().ready) return Promise.resolve();
                 if (initialization) return initialization;
@@ -175,12 +207,15 @@ export function createAccountingStore(
                 });
                 return initialization;
             },
-            selectBook: (id) =>
-                run(async () => {
+            selectBook: (id) => {
+                selection++;
+                return run(async () => {
                     apply(await booksService.openBook(id));
-                }),
-            addBook: (id, name, now, data) =>
-                run(async () => {
+                });
+            },
+            addBook: (id, name, now, data) => {
+                selection++;
+                return run(async () => {
                     apply(
                         await booksService.createBook(
                             id,
@@ -191,21 +226,66 @@ export function createAccountingStore(
                             ),
                         ),
                     );
-                }),
+                });
+            },
             reload: () =>
                 run(async () => {
                     const id = get().current?.book.id;
                     set({ books: await booksService.listBooks() });
                     if (id) apply(await booksService.openBook(id));
                 }),
-            synchronize: (operation) =>
-                run(async () => {
-                    const current = get().current;
-                    if (!current) throw new Error("请先选择账本。");
-                    const result = await operation(current);
-                    set({ books: await booksService.listBooks() });
-                    apply(result);
-                }),
+            synchronize: (operation) => {
+                const requestedBookId = get().current?.book.id;
+                const requestedSelection = selection;
+                syncCount++;
+                set({ syncing: true, syncError: undefined });
+                const next = syncQueue
+                    .then(async () => {
+                        // Finish already queued local commits, then release the local queue
+                        // throughout network I/O so editing and switching books remain usable.
+                        await queue;
+                        const current = get().current;
+                        if (!current) throw new Error("请先选择账本。");
+                        if (
+                            selection !== requestedSelection ||
+                            current.book.id !== requestedBookId
+                        )
+                            return;
+                        let result = current;
+                        let failure: unknown;
+                        try {
+                            result = await operation(structuredClone(current));
+                        } catch (error) {
+                            failure = error;
+                        }
+                        // Read once, including imports committed before a later upload
+                        // failure. The result snapshot can predate edits during upload.
+                        try {
+                            await refreshAfterSync(
+                                result.book.id,
+                                requestedSelection,
+                            );
+                        } catch (error) {
+                            failure ??= error;
+                        }
+                        if (failure !== undefined) {
+                            if (selection === requestedSelection)
+                                set({
+                                    syncError:
+                                        failure instanceof Error
+                                            ? failure.message
+                                            : "账本同步失败，请稍后重试。",
+                                });
+                            throw failure;
+                        }
+                    })
+                    .finally(() => {
+                        syncCount--;
+                        set({ syncing: syncCount > 0 });
+                    });
+                syncQueue = next.catch(() => {});
+                return next;
+            },
             updateData: (transform, now) => {
                 const requestedBookId = get().current?.book.id;
                 return run(async () => {
@@ -230,7 +310,7 @@ export function createAccountingStore(
                     apply(
                         await booksService.saveBook(
                             current.book.id,
-                            current.book.revision,
+                            current.book.version,
                             recalculated,
                             now,
                         ),

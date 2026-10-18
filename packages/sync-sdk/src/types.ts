@@ -1,3 +1,7 @@
+export interface StateVersion {
+    writerSeq: number;
+    repoSeq: number;
+}
 export type WriterId = string;
 export type CollectionId = string;
 export type RecordId = string;
@@ -7,11 +11,11 @@ export interface RecordInput<T = unknown> {
 }
 export interface PutResult {
     id: RecordId;
-    revision: number;
+    version: StateVersion;
 }
 export interface PutManyResult {
     ids: RecordId[];
-    revision: number;
+    version: StateVersion;
 }
 /** Confirmed version, or the baseline of an unpublished local edit. */
 export interface RecordVersion<T = unknown> {
@@ -94,8 +98,6 @@ export interface SyncState {
     repoSeq: number;
     /** Shared local sync activity; managed while holding the database's exclusive sync lock. */
     isSyncing: boolean;
-    /** Local transaction revision, also used by optimistic saves and query cursors. */
-    revision: number;
     remote?: RemoteBinding;
     publication?: Publication;
     /** Last completely imported manifest, used for offline reads and conflict detection. */
@@ -105,7 +107,6 @@ export interface PendingSnapshot {
     writerId: WriterId;
     writerSeq: number;
     repoSeq: number;
-    revision: number;
     records: DataEntry[];
 }
 export interface RecordBatch {
@@ -131,7 +132,7 @@ export interface QueryCursor {
     collection: string;
     orderBy: "id" | "time";
     direction: "asc" | "desc";
-    revision: number;
+    version: StateVersion;
     id: string;
     time?: number;
     from: number;

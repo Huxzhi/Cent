@@ -7,7 +7,7 @@ export async function getState(connection: DatabaseConnection) {
     ).get("config", "syncState")) as SyncState;
 }
 
-/** Caller must hold the database sync lock; this does not change data revisions or sequences. */
+/** Caller must hold the database sync lock; this does not change either data sequence. */
 export async function setSyncing(
     connection: DatabaseConnection,
     isSyncing: boolean,

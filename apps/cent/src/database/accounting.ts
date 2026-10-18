@@ -1,3 +1,8 @@
+import {
+    type StateVersion,
+    sameStateVersion,
+    stateVersion,
+} from "@glink25/sync-sdk";
 import { type DBSchema, type IDBPTransaction, openDB } from "idb";
 import { isEqual } from "lodash-es";
 import {
@@ -25,7 +30,7 @@ export const ACCOUNTING_BOOK_PREFIX = "cent-accounting-book/v6/";
 export interface AccountingBook {
     id: string;
     name: string;
-    revision: number;
+    version: StateVersion;
     createdAt: number;
     updatedAt: number;
 }
@@ -60,7 +65,7 @@ export interface AccountingRepository {
     ): Promise<LoadedAccountingBook>;
     saveBook(
         id: string,
-        revision: number,
+        version: StateVersion,
         data: AccountingData,
         now: number,
     ): Promise<LoadedAccountingBook>;
@@ -110,7 +115,12 @@ export class AccountingConflictError extends Error {
 function checkBook(book: AccountingBook): AccountingBook {
     if (!book.id.trim() || !book.name.trim())
         throw new Error("账本 ID 和名称不能为空。");
-    if (!Number.isSafeInteger(book.revision) || book.revision < 0)
+    if (
+        !book.version ||
+        ![book.version.writerSeq, book.version.repoSeq].every(
+            (seq) => Number.isSafeInteger(seq) && seq >= 0,
+        )
+    )
         throw new Error("账本版本无效。");
     for (const time of [book.createdAt, book.updatedAt]) {
         if (!Number.isSafeInteger(time) || time < 0)
@@ -305,7 +315,7 @@ export class IndexedDBAccountingRepository implements AccountingRepository {
         const book = checkBook({
             id,
             name: name.trim(),
-            revision: 0,
+            version: { writerSeq: 0, repoSeq: 0 },
             createdAt: now,
             updatedAt: now,
         });
@@ -313,10 +323,11 @@ export class IndexedDBAccountingRepository implements AccountingRepository {
     }
     async saveBook(
         id: string,
-        revision: number,
+        version: StateVersion,
         input: AccountingData,
         now: number,
     ): Promise<LoadedAccountingBook> {
+        version = stateVersion(version);
         const data = validateAccountingData(input, now);
         if (!Number.isSafeInteger(now) || now < 0)
             throw new Error("账本时间无效。");
@@ -331,11 +342,17 @@ export class IndexedDBAccountingRepository implements AccountingRepository {
                     tx.objectStore("__stashes").getAll(),
                 ]);
             const previous = configBook(config?.value);
-            if (previous.id !== id || previous.revision !== revision)
+            if (
+                previous.id !== id ||
+                !sameStateVersion(previous.version, version)
+            )
                 throw new AccountingConflictError();
             const book = checkBook({
                 ...previous,
-                revision: revision + 1,
+                version: {
+                    writerSeq: previous.version.writerSeq + 1,
+                    repoSeq: previous.version.repoSeq,
+                },
                 updatedAt: Math.max(now, previous.updatedAt),
             });
             const meta = toAccountingMeta(data);
@@ -475,7 +492,10 @@ export class IndexedDBAccountingRepository implements AccountingRepository {
             const config = (await tx.objectStore("__config").get("metaKey"))
                 ?.value;
             const book = configBook(config);
-            if (book.revision !== snapshot.book.revision || config?.sync)
+            if (
+                !sameStateVersion(book.version, snapshot.book.version) ||
+                config?.sync
+            )
                 throw new AccountingConflictError();
             await tx.objectStore("__config").put(
                 configRecord(book, {
@@ -533,7 +553,10 @@ export class IndexedDBAccountingRepository implements AccountingRepository {
             const pending = createStashActions(remote, canonical, now);
             const book = checkBook({
                 ...previous,
-                revision: previous.revision + 1,
+                version: {
+                    writerSeq: previous.version.writerSeq,
+                    repoSeq: previous.version.repoSeq + 1,
+                },
                 updatedAt: Math.max(now, previous.updatedAt),
             });
             const sync = {

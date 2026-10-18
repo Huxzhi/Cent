@@ -72,6 +72,7 @@ export {
     currencyValueRate,
     defaultCurrencySettings,
 } from "./currency-settings";
+export { duplicateTransaction } from "./duplicate-transaction";
 export {
     getEditableTransactionInput,
     updateTransaction,
@@ -85,6 +86,7 @@ export {
 } from "./exchange-rates";
 export { getFundingTransactionType, saveFundingTransaction } from "./funding";
 export {
+    canReclassifyTransaction,
     createJournalTransaction,
     getEditableJournalInput,
     type JournalTransactionInput,

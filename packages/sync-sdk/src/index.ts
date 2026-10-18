@@ -34,9 +34,12 @@ export type {
     RemoteFile,
     RemoteTransport,
     RetiredFile,
+    StateVersion,
     StoredRecord,
     SyncState,
     WriterId,
 } from "./types";
 export { SyncError } from "./types";
 export { createId } from "./utils/id";
+
+export { sameStateVersion, stateVersion } from "./utils/version";

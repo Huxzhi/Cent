@@ -20,7 +20,7 @@ export function useAccountingSync() {
             if (reloading) return;
             reloading = true;
             try {
-                // Imports can commit many revisions while a refresh is queued.
+                // Imports can commit many updates while a refresh is queued.
                 // Read again if another commit arrives during the current read.
                 while (requested && !disposed) {
                     requested = false;
@@ -33,9 +33,14 @@ export function useAccountingSync() {
                 reloading = false;
             }
         };
-        const unsubscribe = accountingBooks.onChange(({ bookId }) => {
-            if (bookId === accountingStore.getState().current?.book.id)
-                void reload();
+        const unsubscribe = accountingBooks.onChange(({ bookId, source }) => {
+            const state = accountingStore.getState();
+            if (bookId !== state.current?.book.id) return;
+            // Own saves apply their committed snapshot; foreground sync refreshes once
+            // at completion. Other-tab changes must still be read after any local save.
+            if (source === "local" && state.busy) return;
+            if (source === "sync" && state.syncing) return;
+            void reload();
         });
         const onFocus = () => void reload();
         window.addEventListener("focus", onFocus);
@@ -49,11 +54,21 @@ export function useAccountingSync() {
         if (!id || !remoteId) return;
         let disposed = false;
         const pull = () => {
-            if (disposed) return;
+            if (
+                disposed ||
+                !navigator.onLine ||
+                accountingStore.getState().syncing
+            )
+                return;
             void loadStorageAPI()
                 .then(({ StorageAPI }) => {
                     const sync = StorageAPI.books;
-                    if (!sync || disposed || StorageAPI.type !== provider)
+                    if (
+                        !sync ||
+                        disposed ||
+                        !navigator.onLine ||
+                        StorageAPI.type !== provider
+                    )
                         return;
                     return accountingStore
                         .getState()

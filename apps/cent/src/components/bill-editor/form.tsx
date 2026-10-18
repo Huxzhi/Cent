@@ -7,9 +7,11 @@ import { decodeApiKey } from "@/utils/api-key";
 import PopupLayout from "../../layouts/popup-layout";
 import {
     amountToDecimal,
+    canReclassifyTransaction,
     createCurrencyExpense,
     createJournalTransaction,
     createTransaction,
+    type Entry,
     getCurrencyExpenseCategory,
     getCurrencyExpenseEstimate,
     getEditableJournalInput,
@@ -28,7 +30,10 @@ import {
 } from "../../ledger/accounting";
 import { getCurrencyExchangeAmounts } from "../../ledger/accounting/currency-exchange";
 import { isCurrencyTradingGroup } from "../../ledger/accounting/currency-trading";
-import { saveFundingTransaction } from "../../ledger/accounting/funding";
+import {
+    canEditFundingTransaction,
+    saveFundingTransaction,
+} from "../../ledger/accounting/funding";
 import { accountingStore } from "../../store/accounting";
 import { usePreferenceStore } from "../../store/preference";
 import { bookDayjs, formatTime, parseBookDateTime } from "../../utils/time";
@@ -78,6 +83,7 @@ import {
 } from "../map/location-picker";
 import CurrentLocation from "../simple-location";
 import { Button } from "../ui/button";
+import { getQuickModeDraft } from "./mode";
 import ResizeHandle from "./resize";
 import TagGroupSelector from "./tag-group";
 
@@ -221,7 +227,6 @@ export default function EditorForm({
               ),
     );
     const [activeId, setActiveId] = useState("");
-    const [journalDirty, setJournalDirty] = useState(false);
     const [journalType, setJournalType] = useState<JournalType>(
         initialJournal?.type ?? "transfer",
     );
@@ -387,7 +392,6 @@ export default function EditorForm({
         configuring && !exchanging ? (activeRow?.amount ?? "") : quickAmount;
     const setAmount = (value: string) => {
         if (configuring && !exchanging) {
-            setJournalDirty(true);
             setRows((previous) =>
                 previous.map((row) =>
                     paired || row.id === activeRow?.id
@@ -497,8 +501,7 @@ export default function EditorForm({
         "";
     const canUseQuick =
         !transaction ||
-        !!initialInput ||
-        (transaction.entries.length === 2 && !!initialJournal);
+        canReclassifyTransaction(transaction, current?.data.accounts ?? []);
     let journalReady = false;
     try {
         journalReady =
@@ -564,66 +567,87 @@ export default function EditorForm({
     }
     const canSave = configuring
         ? exchanging
-            ? exchangeReady && (!transaction || !!initialExchange)
-            : journalReady && (!transaction || !!initialJournal)
+            ? exchangeReady &&
+              (!transaction ||
+                  canEditFundingTransaction(
+                      transaction,
+                      current?.data.accounts ?? [],
+                  ))
+            : journalReady && canUseQuick
         : !!left && !!right && canUseQuick;
     const switchMode = (value: EditorMode) => {
-        if (
-            value === "configuration" &&
-            !journalDirty &&
-            mode !== "configuration"
-        ) {
-            setRows(
-                isPairedTemplate(template)
-                    ? createTemplateDraft(
-                          template,
-                          accounts.filter(
-                              (account) => account.currency === currency,
-                          ),
-                          quickAmount,
-                          () => crypto.randomUUID(),
-                      )
-                    : [
-                          {
-                              id:
-                                  rows.find((row) => row.side === "debit")
-                                      ?.id ?? crypto.randomUUID(),
-                              side: "debit",
-                              accountId: mode === "expense" ? right : left,
-                              amount: quickAmount,
-                          },
-                          {
-                              id:
-                                  rows.find((row) => row.side === "credit")
-                                      ?.id ?? crypto.randomUUID(),
-                              side: "credit",
-                              accountId: mode === "expense" ? left : right,
-                              amount: quickAmount,
-                          },
-                      ],
-            );
+        if (value === "configuration" && mode !== "configuration") {
+            setRows([
+                {
+                    id:
+                        rows.find((row) => row.side === "debit")?.id ??
+                        crypto.randomUUID(),
+                    side: "debit",
+                    accountId: mode === "expense" ? right : left,
+                    amount: quickAmount,
+                },
+                {
+                    id:
+                        rows.find((row) => row.side === "credit")?.id ??
+                        crypto.randomUUID(),
+                    side: "credit",
+                    accountId: mode === "expense" ? left : right,
+                    amount: quickAmount,
+                },
+            ]);
+            setTemplate("custom");
+            setJournalType(mode === "income" ? "income" : "expense");
             setActiveId("");
         }
         if (value !== "configuration") {
-            if (
-                leftId &&
-                !eligible.some(
-                    (account) =>
-                        account.id === leftId &&
-                        (account.type === "asset" ||
-                            (value === "expense" &&
-                                account.type === "liability")),
+            if (configuring) {
+                let entries: Entry[] = [];
+                try {
+                    entries = exchanging
+                        ? [
+                              {
+                                  accountId: exchangeDraft.fromAccountId,
+                                  amount: -parseMoney(
+                                      calculateAmount(quickAmount),
+                                  ),
+                              },
+                              {
+                                  accountId: exchangeDraft.toAccountId,
+                                  amount: parseMoney(
+                                      calculateAmount(exchangeDraft.received),
+                                  ),
+                              },
+                          ]
+                        : draftToEntries(rows);
+                } catch {
+                    // An incomplete draft may still switch modes; its amount remains editable.
+                }
+                const draft = getQuickModeDraft(value, entries, accounts);
+                setLeftId(draft.leftId);
+                setRightId(draft.rightId);
+                setQuickAmount(draft.amount);
+                if (draft.currency) setCurrency(draft.currency);
+            } else {
+                if (
+                    leftId &&
+                    !eligible.some(
+                        (account) =>
+                            account.id === leftId &&
+                            (account.type === "asset" ||
+                                (value === "expense" &&
+                                    account.type === "liability")),
+                    )
                 )
-            )
-                setLeftId("");
-            if (
-                rightId &&
-                !eligible.some(
-                    (account) =>
-                        account.id === rightId && account.type === value,
+                    setLeftId("");
+                if (
+                    rightId &&
+                    !eligible.some(
+                        (account) =>
+                            account.id === rightId && account.type === value,
+                    )
                 )
-            )
-                setRightId("");
+                    setRightId("");
+            }
         }
         setMode(value);
         setCalculatorError(undefined);
@@ -631,7 +655,6 @@ export default function EditorForm({
     const selectTemplate = (value: JournalTemplate) => {
         setTemplate(value);
         if (value !== "asset_purchase") setPeriodEnabled(false);
-        setJournalDirty(true);
         setJournalType(
             value === "custom" || value === "currency_exchange"
                 ? "journal"
@@ -691,6 +714,24 @@ export default function EditorForm({
                 const history = data.transactions.filter(
                     (item) => item.id !== transaction?.id,
                 );
+                const replace = (
+                    saved: Transaction,
+                    accounts = data.accounts,
+                ) =>
+                    originalDepreciation && saved.type !== "asset_purchase"
+                        ? saveDepreciatingPurchase(
+                              { ...data, accounts },
+                              saved,
+                              undefined,
+                              now,
+                              () => crypto.randomUUID(),
+                              t("accounting-depreciation-expense"),
+                          )
+                        : {
+                              ...data,
+                              accounts,
+                              transactions: [...history, saved],
+                          };
                 if (exchanging) {
                     if (!exchangeFrom)
                         throw new Error(t("accounting-journal-select-account"));
@@ -721,11 +762,7 @@ export default function EditorForm({
                         trading,
                         !!transaction,
                     );
-                    return {
-                        ...data,
-                        accounts: saved.accounts,
-                        transactions: [...history, saved.transaction],
-                    };
+                    return replace(saved.transaction, saved.accounts);
                 }
                 let input: JournalTransactionInput;
                 if (
@@ -749,11 +786,7 @@ export default function EditorForm({
                             baseCurrency: data.currencySettings?.baseCurrency,
                         },
                     );
-                    return {
-                        ...data,
-                        accounts: saved.accounts,
-                        transactions: [...history, saved.transaction],
-                    };
+                    return replace(saved.transaction, saved.accounts);
                 }
                 if (configuring) {
                     input = {
@@ -791,32 +824,19 @@ export default function EditorForm({
                         entries: candidate.entries,
                     };
                 }
-                const saved =
-                    transaction?.exchange && !configuring
-                        ? {
-                              ...createJournalTransaction(
-                                  input,
-                                  data.accounts,
-                                  history,
-                                  now,
-                              ),
-                              createdAt: transaction.createdAt,
-                              creatorId: transaction.creatorId,
-                              updatedAt: Math.max(now, transaction.updatedAt),
-                          }
-                        : transaction
-                          ? updateJournalTransaction(
-                                input,
-                                data.accounts,
-                                data.transactions,
-                                now,
-                            )
-                          : createJournalTransaction(
-                                input,
-                                data.accounts,
-                                history,
-                                now,
-                            );
+                const saved = transaction
+                    ? updateJournalTransaction(
+                          input,
+                          data.accounts,
+                          data.transactions,
+                          now,
+                      )
+                    : createJournalTransaction(
+                          input,
+                          data.accounts,
+                          history,
+                          now,
+                      );
                 if (
                     (configuring && template === "asset_purchase") ||
                     originalDepreciation
@@ -1098,6 +1118,11 @@ export default function EditorForm({
                 disabled={blocked}
                 className="flex-1 min-w-0 min-h-0 overflow-y-auto scrollbar-hidden flex flex-col px-2 text-sm font-medium gap-2 pb-1"
             >
+                {!configuring && transaction && initialInput?.type !== mode && (
+                    <p className="text-xs text-muted-foreground">
+                        {t("accounting-quick-reclassification-help")}
+                    </p>
+                )}
                 {configuring ? (
                     <>
                         {transaction && !initialJournal && !initialExchange ? (
@@ -1281,7 +1306,6 @@ export default function EditorForm({
                                             rows={rows}
                                             disabled={blocked}
                                             onChange={(next) => {
-                                                setJournalDirty(true);
                                                 setRows(next);
                                                 const source =
                                                     getPairedTemplateAccounts(
@@ -1313,7 +1337,6 @@ export default function EditorForm({
                                 template={template}
                                 disabled={blocked}
                                 onRowsChange={(next) => {
-                                    setJournalDirty(true);
                                     setRows(next);
                                 }}
                                 onActiveChange={setActiveId}

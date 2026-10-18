@@ -10,10 +10,12 @@ import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Field, FormError, selectClass, useFormAction } from "./shared";
 
-/** Listing reads only remote Manifests; local storage starts after an explicit choice. */
+/** Cached books open immediately; remote Manifests are listed independently when online. */
 export default function AccountingBookPicker() {
     const t = useIntl();
     const busy = useStore(accountingStore, (state) => state.busy);
+    const localBooks = useStore(accountingStore, (state) => state.books);
+    const [online, setOnline] = useState(() => navigator.onLine);
     const [books, setBooks] = useState<{ id: string; name: string }[]>([]);
     const [remoteId, setRemoteId] = useState("");
     const [name, setName] = useState("");
@@ -25,9 +27,23 @@ export default function AccountingBookPicker() {
         { id: string; name: string; created: boolean } | undefined
     >(undefined);
     const { error, submitting, run } = useFormAction();
+    useEffect(() => {
+        const update = () => setOnline(navigator.onLine);
+        window.addEventListener("online", update);
+        window.addEventListener("offline", update);
+        return () => {
+            window.removeEventListener("online", update);
+            window.removeEventListener("offline", update);
+        };
+    }, []);
     // biome-ignore lint/correctness/useExhaustiveDependencies: The refresh counter explicitly retries the remote listing.
     useEffect(() => {
         let active = true;
+        if (!online) {
+            setLoading(false);
+            setListError(t("accounting-offline-books-help"));
+            return;
+        }
         setLoading(true);
         setListError(undefined);
         void loadStorageAPI()
@@ -51,8 +67,8 @@ export default function AccountingBookPicker() {
         return () => {
             active = false;
         };
-    }, [refresh, t]);
-    const disabled = busy || submitting || loading;
+    }, [online, refresh, t]);
+    const disabled = busy || submitting || loading || !online;
     return (
         <main className="h-full overflow-y-auto flex items-start sm:items-center justify-center p-4">
             <div className="w-full max-w-md rounded-lg border bg-background p-5 space-y-5 my-auto">
@@ -64,6 +80,33 @@ export default function AccountingBookPicker() {
                         {t("accounting-choose-book-help")}
                     </p>
                 </div>
+                {localBooks.length > 0 && (
+                    <section className="space-y-2">
+                        <h2 className="text-sm font-medium">
+                            {t("accounting-local-books")}
+                        </h2>
+                        {localBooks.map((book) => (
+                            <Button
+                                key={book.id}
+                                className="w-full"
+                                variant="outline"
+                                disabled={busy || submitting}
+                                aria-label={t("accounting-open-local-book", {
+                                    name: book.name,
+                                })}
+                                onClick={() =>
+                                    void run(() =>
+                                        accountingStore
+                                            .getState()
+                                            .selectBook(book.id),
+                                    )
+                                }
+                            >
+                                {book.name}
+                            </Button>
+                        ))}
+                    </section>
+                )}
                 {loading ? (
                     <output>{t("accounting-loading-remote-books")}</output>
                 ) : listError ? (

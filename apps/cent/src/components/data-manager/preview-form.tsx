@@ -1,3 +1,4 @@
+import { sameStateVersion, stateVersion } from "@glink25/sync-sdk";
 import { importBillsToAccounting } from "../../ledger/accounting/import-bills";
 import { accountingStore } from "../../store/accounting";
 import createConfirmProvider from "../confirm";
@@ -22,7 +23,7 @@ export async function showImportPreview(input: PreviewState) {
         ...input,
         bills,
         bookId: current.book.id,
-        revision: current.book.revision,
+        version: stateVersion(current.book.version),
     });
 }
 
@@ -37,7 +38,8 @@ export async function importFromPreviewResult(result: PreviewState) {
         if (
             !current ||
             current.book.id !== result.bookId ||
-            current.book.revision !== result.revision
+            !result.version ||
+            !sameStateVersion(current.book.version, result.version)
         )
             throw new Error("账本已变化，请重新预览导入。");
         return importBillsToAccounting(

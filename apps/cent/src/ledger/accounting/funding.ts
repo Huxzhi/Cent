@@ -2,8 +2,7 @@ import {
     type CurrencyExchangeInput,
     createCurrencyExchange,
 } from "./currency-exchange";
-import { getEditableTransactionInput } from "./edit-transaction";
-import { createJournalTransaction } from "./journal";
+import { canReclassifyTransaction, createJournalTransaction } from "./journal";
 import { retainTransactionMedia } from "./transaction-media";
 import type { Account, Transaction } from "./types";
 import { validateTransactions } from "./validation";
@@ -15,6 +14,14 @@ export function getFundingTransactionType(
 ): "topup" | "currency_exchange" | "transfer" {
     if (to.subtype === "prepaid") return "topup";
     return from.currency === to.currency ? "transfer" : "currency_exchange";
+}
+
+/** 录入模式可互相切换，仍替换同一笔手工交易。 */
+export function canEditFundingTransaction(
+    transaction: Transaction,
+    accounts: readonly Account[],
+) {
+    return canReclassifyTransaction(transaction, accounts);
 }
 
 /** 同一入口录入换汇与充值；同币种等额转入只有两条资产分录。 */
@@ -29,17 +36,7 @@ export function saveFundingTransaction(
     const original = edit
         ? transactions.find((item) => item.id === input.id)
         : undefined;
-    if (
-        edit &&
-        (!original ||
-            !(
-                original.type === "currency_exchange" ||
-                original.type === "topup" ||
-                (original.type === "transfer" &&
-                    getEditableTransactionInput(original, accounts)?.type ===
-                        "transfer")
-            ))
-    )
+    if (edit && (!original || !canEditFundingTransaction(original, accounts)))
         throw new Error("Funding transaction not found");
     const history = edit
         ? transactions.filter((item) => item.id !== input.id)

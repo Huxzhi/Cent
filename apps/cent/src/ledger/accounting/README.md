@@ -18,6 +18,10 @@
 
 createTransaction / updateTransaction 处理两账户收支、转账、还款、借款和资产购买。createJournalTransaction / updateJournalTransaction 处理完整自由分录；多账户交易不简化为两条分录。getEditableTransactionInput / getEditableJournalInput 还原对应输入，不支持的结构返回 undefined。
 
+支出、收入和复式是同一交易的不同录入模式，可双向切换，不按原 type 或分录数量锁定。切到简易模式时按当前草稿的付款／收款分录预填金额和账户，保存后用所选账户重新生成两条平衡分录，并保留 ID、精确交易时间、创建时间及媒体等信息；复杂分录重录会显示提示，取消不会修改原记录。切回复式使用当前简易草稿，不恢复过期分录。自动折旧只能通过来源购买交易编辑；购买改为其他类型时一并撤销其自动折旧子交易，其他子交易保留。
+
+账单详情的“更多 → 复制”调用 duplicateTransaction，在一次本地提交中新增完整账单，原交易保持不变。复制保留精确到毫秒的 time、可选 endTime、分录、备注、标签、图片和位置，根及全部子交易重新生成 ID、创建和修改时间，并重建父子引用。从子交易发起时复制其来源根账单，与编辑子交易的入口一致。
+
 无 endTime 时按 time 单点记账；有 endTime 时表示排他区间 [time, endTime)，entries 保存整个期间的总金额。matchesTransactionDateRange 判断查询交集，getTransactionAmountInRange 用整数累计额取差分摊，完整期间各段严格加总为总额。图表消费领域聚合结果，不自行解释规则。
 
 Transaction.children 保存完整递归子交易，parentTransactionId 指向直接父交易。IndexedDB 和备份只保存根交易。flattenTransactionTree 展开为领域计算集合，synchronizeTransactionChildren 从计算集合重建父级；拒绝重复 ID、循环、孤立引用及错误容器。统计与成本重放只遍历展开后的集合，每笔计算一次。编辑子交易通过 getTransactionEditTarget 打开根父交易。父交易删除仍受子交易完整性约束。
@@ -38,7 +42,7 @@ saveDepreciatingPurchase 原子保存资产购买及唯一的 depreciation 区�
 
 成本池账户用 currency 计量原币数量，costCurrency 计量投入成本。replayCurrencyCosts 按 time、createdAt、id 重放完整历史，getCurrencyCostBalance 返回剩余数量、成本与未知成本状态。消费成本＝消费数量×消费前剩余成本÷剩余数量；耗尽时取走全部剩余成本。充值将剩余与新增数量、成本分别相加，形成移动加权平均。
 
-createCurrencyExchange / saveFundingTransaction 保存四条换汇分录，有手续费时增加费用分录。到账为充值卡时 type 为 topup，其他跨币种到账为 currency_exchange，普通同币种等额资产转入为 transfer。deriveCurrencyExchange 从分录及 currency_trading 权益子账户派生角色；成交比例为 received / (withdrawn - fee)，不保存 exchange 或汇率副本。手续费单独计费用，不加入本金。
+createCurrencyExchange / saveFundingTransaction 保存四条换汇分录，有手续费时增加费用分录。到账为充值卡时 type 为 topup，其他跨币种到账为 currency_exchange，普通同币种等额资产转入为 transfer。普通可编辑的支出、收入可在编辑器中切换为换汇／充值，表单和保存入口复用同一资格判断；转换沿用原交易 ID、创建时间、创建者、标签及图片／位置，替换原收支分录，不新增一笔重复交易。deriveCurrencyExchange 从分录及 currency_trading 权益子账户派生角色；成交比例为 received / (withdrawn - fee)，不保存 exchange 或汇率副本。手续费单独计费用，不加入本金。
 
 createCurrencyExpense 保存两条同原币的费用与付款分录，创建或复用原费用分类对应的外币镜像账户。getCurrencyExpenseEstimate 提供发生前成本预览；recalculateCurrencyTransactions 在新增、补录、编辑、删除后重算完整候选历史。更新估算不改变 currency.amount 的原币扣款。透支或无效历史拒绝保存，缺少成本依据不猜测 1:1。
 
@@ -58,7 +62,7 @@ statistics.ts 保留收支汇总和完整余额查询；完整余额与成本重
 
 ## 备份、持久化和同步
 
-数据管理中的单式账单导入、智能导入与 Oncent 导入统一先进入复式预览。用户必须选择未归档、允许收付款的资产或负债账户；importBillsToAccounting 按原分类的模板标识和币种复用或创建费用／收入账户，支出借记费用、贷记所选收付款账户：资产余额减少，负债余额增加；收入借记所选账户、贷记收入，退款生成负数费用以冲减原支出。预览按账户的正常余额方向显示净变动。只追加新的账单 ID，同一发生时间的不同 ID 均保留；已有 ID 跳过，不覆盖交易。预览不写库，确认时检查账本 ID 与 revision，再通过一次 updateData 提交整批账户、交易和标签。币种不匹配或任一条目无效时整批拒绝。
+数据管理中的单式账单导入、智能导入与 Oncent 导入统一先进入复式预览。用户必须选择未归档、允许收付款的资产或负债账户；importBillsToAccounting 按原分类的模板标识和币种复用或创建费用／收入账户，支出借记费用、贷记所选收付款账户：资产余额减少，负债余额增加；收入借记所选账户、贷记收入，退款生成负数费用以冲减原支出。预览按账户的正常余额方向显示净变动。只追加新的账单 ID，同一发生时间的不同 ID 均保留；已有 ID 跳过，不覆盖交易。预览不写库，确认时检查账本 ID 与 {writerSeq, repoSeq}，再通过一次 updateData 提交整批账户、交易和标签。币种不匹配或任一条目无效时整批拒绝。
 
 微信智能导入使用 `components/data-manager/schemas/wechat.js` 的独立 `transform(file, ctx)` 脚本，支持官方 XLSX／XLS／CSV／TSV 文件，解析库通过 transform.worker.ts 随应用打包，运行时不访问 CDN；自动查找明细表头，按 UTC+8 读取时间并保留长交易单号。脚本为每条记录附加 `paymentMethod`，预览为每种支付方式分别选择收付款账户；未注明方式的记录单独选择，明确“已存入零钱”的收入归到零钱。各组分配后一次原子提交，writerSeq 只增加一次；普通未分组导入仍只选择一个收付款账户。收入方向的退款生成负数费用，原已退款支出保留；中性交易和未完成交易不自动导入，分类只做保守匹配，商户单号等保留在备注。
 
@@ -69,6 +73,10 @@ statistics.ts 保留收支汇总和完整余额查询；完整余额与成本重
 exportAccountingJson(accounts, transactions, tagMetadata?, mapConfig?, currencySettings?, statisticsViews?, timeZone?) 导出完整根交易与元数据。importAccountingJson 只接受 format: cent-accounting、schemaVersion: 17、amountScale: 10000；旧开发版本、未知字段和无效数据整份拒绝，不自动迁移。validateAccountingData 校验账户、原币平衡、树、区间、成本历史及元数据。交易不导出派生 currency、exchange、展示金额或规则副本。
 
 
-每账本独立 IndexedDB 库 cent-accounting-book/v6/<编码账本 ID>，沿用 __items、__meta、__config、__stashes。根交易、账户、版本与增量原子提交，失败回滚；多个标签页使用 revision 拒绝覆盖。store 串行提交完整候选，写入成功才更新可见状态。
+当前账本使用 cent/<账本 ID> 独立 IndexedDB 库，仅保存 records 与 config。账本版本是从 syncState 取得的 {writerSeq, repoSeq} 快照，不再维护第三个计数。根交易、账户与序号原子提交；保存和冲突确认在同一写事务内检查双序号，任一变化则拒绝旧快照。广播只通知刷新，不能替代事务内的保存检查。store 串行提交完整候选，写入成功才更新可见状态。
+
+本地保存与渲染优先：updateData 只等待 IndexedDB 提交，成功后立即更新视图，失败则保持原可见数据。网络同步使用独立队列与 syncing / syncError 状态，不占用本地 busy 队列；慢网和上传失败不阻塞继续编辑或切换账本。连续保存延迟 1 秒合并触发后台同步，同步中导入的通知在该轮结束后统一发出；完成时重新读取最新本地数据库，不直接应用上传前的返回快照。用户已切换账本时忽略旧轮次的界面刷新。网络失败保留待上传数据，后续可重试；实际因果冲突仍需确认完整版本。
+
+启动时先读取上次选择的本地账本，不等待同步适配器、远端列表或网络校验；选择已有本地副本也不等待拉取。未指定当前账本时，选择页独立列出本地账本，离线或远端列表失败仍可打开；本地新建但未发布的账本同样可编辑。离线期间暂停自动同步，恢复网络后由 online 事件触发当前已绑定账本的增量同步。首次打开尚未下载的远端账本需要联网。生产 PWA 通过 Service Worker 预缓存应用资源，已完成缓存后支持断网重新打开页面。
 
 账本通过 src/sync/accounting.ts 调用独立 packages/sync-sdk，api/endpoints/shared.ts 只负责端点和调度。当前支持 WebDAV、GitHub 与离线模式。同步使用 Writer 独立序号、因果上下文、Put-Wins、不可变批次和条件提交 Head；并发金额保留完整版本，解决冲突前不进入统计。根交易递归包含 children，业务校验复用本目录，详见 docs/sync-sdk-implementation.md。

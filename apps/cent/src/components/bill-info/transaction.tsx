@@ -1,7 +1,9 @@
+import { createId } from "@glink25/sync-sdk";
 import { type ReactNode, useState } from "react";
 import { useStore } from "zustand";
 import { useTag } from "../../hooks/use-tag";
 import {
+    duplicateTransaction,
     getAccountIcon,
     getChildTransactions,
     getCurrencyExchangeRate,
@@ -18,6 +20,7 @@ import {
     getTransactionDescription,
     getTransactionPresentation,
 } from "../../ledger/accounting/presentation";
+import { measure } from "../../measurement";
 import { accountingStore } from "../../store/accounting";
 import { useUserStore } from "../../store/user";
 import { formatTime } from "../../utils/time";
@@ -186,6 +189,42 @@ function TransactionInfo({
                                 </Button>
                             </DropdownMenuTrigger>
                             <DropdownMenuContent align="start">
+                                <DropdownMenuItem
+                                    disabled={blocked}
+                                    onClick={() =>
+                                        void run(async () => {
+                                            const now = Date.now();
+                                            await accountingStore
+                                                .getState()
+                                                .updateData(
+                                                    (data) => ({
+                                                        ...data,
+                                                        transactions: [
+                                                            ...data.transactions,
+                                                            ...duplicateTransaction(
+                                                                transaction.id,
+                                                                data.transactions,
+                                                                now,
+                                                                createId,
+                                                            ),
+                                                        ],
+                                                    }),
+                                                    now,
+                                                );
+                                            measure("bill_created", {
+                                                source: "duplicate",
+                                                item_count: 1,
+                                            });
+                                            onCancel?.();
+                                        })
+                                    }
+                                >
+                                    <i
+                                        aria-hidden
+                                        className="icon-[mdi--content-copy]"
+                                    />
+                                    {t("duplicate")}
+                                </DropdownMenuItem>
                                 <DropdownMenuItem
                                     className="text-red-600"
                                     disabled={

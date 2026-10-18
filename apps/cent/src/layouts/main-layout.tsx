@@ -2,7 +2,6 @@ import { Toaster } from "@glink25/toast";
 import { useCallback, useEffect, useState } from "react";
 import { Outlet } from "react-router";
 import { useStore } from "zustand";
-import { loadStorageAPI } from "../api/storage/dynamic";
 import {
     getSelectedSyncEndpoint,
     type SyncEndpoint,
@@ -52,8 +51,7 @@ function AccountingLayout({ selected }: { selected: SyncEndpoint }) {
             preferred = localStorage.getItem(ACTIVE_BOOK_KEY) ?? undefined;
         } catch {}
         try {
-            // Configure the selected remote before deciding which book to open.
-            await loadStorageAPI();
+            // Opening a cached book uses IndexedDB only; remote setup/sync is background work.
             await initialize(preferred, {
                 createDefault: selected === "offline",
                 selectFirst: selected === "offline",
@@ -67,10 +65,7 @@ function AccountingLayout({ selected }: { selected: SyncEndpoint }) {
     useEffect(() => {
         void initializeBook();
     }, [initializeBook]);
-    const needsSelection =
-        selected !== "offline" &&
-        (!current?.remoteId ||
-            (current.remoteProvider ?? "webdav") !== selected);
+    const needsSelection = selected !== "offline" && !current;
     const bookId = current?.book.id;
     useEffect(() => {
         if (!bookId || needsSelection) return;

@@ -1,5 +1,5 @@
 import * as config from "../config/state";
-import * as revisions from "../files/transactions";
+import * as transactions from "../files/transactions";
 import type {
     Change,
     Manifest,
@@ -78,12 +78,12 @@ export class IndexedDBStore {
         record: RecordInput<T>,
         options?: WriteOptions,
     ): Promise<PutResult> {
-        const { ids, revision } = await this.putMany(
+        const { ids, version } = await this.putMany(
             collection,
             [record],
             options,
         );
-        return { id: ids[0], revision };
+        return { id: ids[0], version };
     }
 
     async delete(collection: string, recordId: string, options?: WriteOptions) {
@@ -107,10 +107,10 @@ export class IndexedDBStore {
         return batch(this.connection, this.changes, input, options);
     }
     exportPending(manifest?: Manifest) {
-        return revisions.exportPending(this.connection, manifest);
+        return transactions.exportPending(this.connection, manifest);
     }
     importManifest(manifest: Manifest, batches: RecordBatch[]) {
-        return revisions.importManifest(
+        return transactions.importManifest(
             this.connection,
             this.changes,
             manifest,
@@ -118,6 +118,6 @@ export class IndexedDBStore {
         );
     }
     savePublication(publication: Publication) {
-        return revisions.savePublication(this.connection, publication);
+        return transactions.savePublication(this.connection, publication);
     }
 }

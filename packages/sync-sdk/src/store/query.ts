@@ -7,6 +7,11 @@ import {
     type SyncState,
 } from "../types";
 import { assert } from "../utils/codec";
+import {
+    isStateVersion,
+    sameStateVersion,
+    stateVersion,
+} from "../utils/version";
 import type { DatabaseConnection } from "./database";
 import { projectEntry } from "./entry";
 export async function get<T = unknown>(
@@ -87,7 +92,8 @@ export async function query<T = unknown>(
             cursor.collection !== collection ||
             cursor.orderBy !== orderBy ||
             cursor.direction !== direction ||
-            cursor.revision !== state.revision ||
+            !isStateVersion(cursor.version) ||
+            !sameStateVersion(cursor.version, state) ||
             cursor.from !== from ||
             cursor.to !== to)
     )
@@ -151,7 +157,7 @@ export async function query<T = unknown>(
                   collection,
                   orderBy,
                   direction,
-                  revision: state.revision,
+                  version: stateVersion(state),
                   id: last.record.id,
                   ...(last.time === undefined ? {} : { time: last.time }),
                   from,

@@ -25,6 +25,20 @@ export interface JournalTransactionInput extends TransactionMedia {
     tagIds?: string[];
 }
 
+/** 手工交易可重新选择录入模式；自动折旧始终由来源购买交易管理。 */
+export function canReclassifyTransaction(
+    transaction: Transaction,
+    accounts: readonly Account[],
+): boolean {
+    if (transaction.type === "depreciation") return false;
+    try {
+        validateTransaction(transaction, accounts);
+        return true;
+    } catch {
+        return false;
+    }
+}
+
 /** 自由复式分录不按业务名称限制账户类型，正式金额必须独立平衡。 */
 export function createJournalTransaction(
     input: JournalTransactionInput,
@@ -145,7 +159,7 @@ export function updateJournalTransaction(
     validateTransactions(transactions, accounts);
     const original = transactions.find((item) => item.id === input.id);
     if (!original) throw new Error(`Transaction not found: ${input.id}`);
-    if (!getEditableJournalInput(original, accounts))
+    if (!canReclassifyTransaction(original, accounts))
         throw new Error("This transaction requires a dedicated editor");
     const created = createJournalTransaction(
         {

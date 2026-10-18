@@ -10,6 +10,7 @@ import {
     resolveCurrencyCostAccounts,
 } from "./currency-cost";
 import { getEntryAmount } from "./entry-amount";
+import { canReclassifyTransaction } from "./journal";
 import {
     copyTransactionMedia,
     retainTransactionMedia,
@@ -142,7 +143,7 @@ export function createCurrencyExpense(
     };
     const expense = ensureNativeExpense(target);
     const original = history.find((transaction) => transaction.id === input.id);
-    if (edit && (!original || !getEditableCurrencyExpense(original, accounts)))
+    if (edit && (!original || !canReclassifyTransaction(original, accounts)))
         throw new Error("Editable expense not found");
     const candidate = history.filter(
         (transaction) => transaction.id !== input.id,

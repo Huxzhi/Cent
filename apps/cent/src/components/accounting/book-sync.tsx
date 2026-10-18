@@ -8,7 +8,7 @@ import { FormError, selectClass, useFormAction } from "./shared";
 
 export default function AccountingBookSync() {
     const t = useIntl();
-    const { current, busy } = useStore(accountingStore);
+    const { current, busy, syncing, syncError } = useStore(accountingStore);
     const { error, submitting, run } = useFormAction();
     const [remoteBooks, setRemoteBooks] = useState<
         { id: string; name: string }[]
@@ -47,7 +47,7 @@ export default function AccountingBookSync() {
             <div className="flex gap-2 flex-wrap">
                 <Button
                     variant="outline"
-                    disabled={busy || submitting}
+                    disabled={busy || submitting || syncing}
                     onClick={() =>
                         void run(async () => {
                             const remote = await api();
@@ -117,7 +117,7 @@ export default function AccountingBookSync() {
                         ))}
                     </select>
                     <Button
-                        disabled={busy || submitting || !remoteId}
+                        disabled={busy || submitting || syncing || !remoteId}
                         onClick={() =>
                             void run(async () => {
                                 const remote = await api();
@@ -133,7 +133,7 @@ export default function AccountingBookSync() {
                     </Button>
                 </div>
             )}
-            <FormError error={error} />
+            <FormError error={error ?? syncError} />
         </fieldset>
     );
 }

@@ -16,6 +16,10 @@
 
 列表展示由 list-rules.ts 按交易 type 选择用途，list-presentation.ts 读取分录生成主条目、子条目共用的金额、原币/到账数量、手续费和期间数据。借款显示借入本金，还款显示偿还本金，均使用中性色；这些展示金额不用于余额或收支统计。组件复用 transaction-display.tsx 的金额、备注与期间格式，备注和原币/到账信息同行，窄屏自然换行。
 
+首页按交易 time 升序展示，先显示最早的账单；相同时间按 ID 排序。sync/book-page.ts 使用 SDK 的 IndexedDB time 索引每次读取 50 条索引记录，首页 use-book-pages.ts 滚动接近末尾时继续取游标页，不在内存全量数组上截取分页。独立子交易不单独占主列表位置，与父账单一起展示；子交易的独立记录覆盖父级内嵌副本。删除记录不显示，writerSeq / repoSeq 变化后重新建立游标链，避免漏项和重复。
+
+打开已有账本时先读取首批，store.preview 仅供只读首屏，完整账本在让出首帧后继续准备。完整校验前不展示金额、余额或统计，不开放编辑；准备完成后保留分页状态及滚动位置。store.current 始终保存完整数据，更新与导出绝不使用分页数据替换完整账本。transaction-list.tsx 使用已有的 TanStack Virtual，只挂载可见项与少量缓冲项，动态测量日期标题、图片、手续费和子账单的行高；搜索列表同样虚拟化，仍使用原有筛选与倒序。
+
 createTransaction / updateTransaction 处理两账户收支、转账、还款、借款和资产购买。createJournalTransaction / updateJournalTransaction 处理完整自由分录；多账户交易不简化为两条分录。getEditableTransactionInput / getEditableJournalInput 还原对应输入，不支持的结构返回 undefined。
 
 支出、收入和复式是同一交易的不同录入模式，可双向切换，不按原 type 或分录数量锁定。切到简易模式时按当前草稿的付款／收款分录预填金额和账户，保存后用所选账户重新生成两条平衡分录，并保留 ID、精确交易时间、创建时间及媒体等信息；复杂分录重录会显示提示，取消不会修改原记录。切回复式使用当前简易草稿，不恢复过期分录。自动折旧只能通过来源购买交易编辑；购买改为其他类型时一并撤销其自动折旧子交易，其他子交易保留。

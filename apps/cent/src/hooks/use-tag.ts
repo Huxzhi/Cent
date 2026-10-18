@@ -14,7 +14,10 @@ import { accountingStore } from "@/store/accounting";
 import { useUserStore } from "@/store/user";
 
 export function useTag() {
-    const data = useStore(accountingStore, (state) => state.current?.data);
+    const data = useStore(
+        accountingStore,
+        (state) => state.current?.data ?? state.preview?.data,
+    );
     const userId = useUserStore((state) => String(state.id));
     const t = useIntl();
     const metadata = useMemo(

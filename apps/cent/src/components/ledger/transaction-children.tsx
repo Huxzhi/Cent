@@ -20,10 +20,12 @@ export default function TransactionChildren({
     parent,
     context,
     nested = false,
+    disabled = false,
 }: {
     parent: Transaction;
     context: TransactionListContext;
     nested?: boolean;
+    disabled?: boolean;
 }) {
     const { t, labelAccount, labelTransaction } = useAccountingLabels();
     const children = parent.children ?? [];
@@ -39,7 +41,8 @@ export default function TransactionChildren({
                     type="button"
                     className="block py-1 text-left text-muted-foreground"
                     onClick={() => {
-                        void showTransactionInfo(child).catch(() => {});
+                        if (!disabled)
+                            void showTransactionInfo(child).catch(() => {});
                     }}
                 >
                     ↳ {labelTransaction(child)} ·{" "}
@@ -49,7 +52,7 @@ export default function TransactionChildren({
         }
         const fee = display.fee;
         const open = () => {
-            void showTransactionInfo(child).catch(() => {});
+            if (!disabled) void showTransactionInfo(child).catch(() => {});
         };
         return (
             <div key={child.id}>
@@ -105,7 +108,12 @@ export default function TransactionChildren({
                         </span>
                     </button>
                 )}
-                <TransactionChildren parent={child} context={context} nested />
+                <TransactionChildren
+                    parent={child}
+                    context={context}
+                    nested
+                    disabled={disabled}
+                />
             </div>
         );
     });

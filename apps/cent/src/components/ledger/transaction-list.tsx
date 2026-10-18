@@ -1,10 +1,12 @@
-import { Fragment, useMemo } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
+import { useEffect, useMemo, useRef } from "react";
 import { useStore } from "zustand";
 import { useAccountingView } from "../../hooks/use-accounting-view";
 import { useCurrency } from "../../hooks/use-currency";
 import { useTag } from "../../hooks/use-tag";
 import {
     type Account,
+    type AccountingData,
     getAccountIcon,
     type Transaction,
 } from "../../ledger/accounting";
@@ -36,21 +38,35 @@ export default function TransactionList({
     displayCurrency,
     showPeriodDates = true,
     showChildren = false,
+    direction = "desc",
+    contextData,
+    preparing = false,
+    hasMore = false,
+    loading = false,
+    onLoadMore,
 }: {
     displayCurrency?: string;
     showPeriodDates?: boolean;
     showChildren?: boolean;
     transactions: Transaction[];
     accounts: Account[];
+    direction?: "asc" | "desc";
+    contextData?: AccountingData;
+    preparing?: boolean;
+    hasMore?: boolean;
+    loading?: boolean;
+    onLoadMore?: () => void;
 }) {
     const { t, labelTransaction, labelAccount } = useAccountingLabels();
     const { tags } = useTag();
     const { convert, baseCurrency } = useCurrency();
     const showAssets = usePreferenceStore((state) => state.showAssetsInLedger);
-    const data = useStore(accountingStore, (state) => state.current?.data);
-    const view = useAccountingView(data);
+    const stored = useStore(accountingStore, (state) => state.current?.data);
+    const data = contextData ?? stored;
+    const view = useAccountingView(preparing ? undefined : data);
     const costLedger = useMemo(() => {
         try {
+            if (preparing) return undefined;
             return replayCurrencyCosts(
                 accounts,
                 view.transactions,
@@ -60,7 +76,7 @@ export default function TransactionList({
         } catch {
             return undefined;
         }
-    }, [accounts, view.transactions, baseCurrency.id]);
+    }, [accounts, view.transactions, baseCurrency.id, preparing]);
     const context: TransactionListContext = {
         accounts,
         through: view.now,
@@ -73,26 +89,70 @@ export default function TransactionList({
             return Number.isFinite(rate) && rate > 0 ? rate : undefined;
         },
     };
-    const ordered = transactions
-        .filter(
-            (transaction) => !showChildren || !transaction.parentTransactionId,
-        )
-        .sort(
-            (left, right) =>
-                right.time - left.time ||
-                right.createdAt - left.createdAt ||
-                left.id.localeCompare(right.id),
-        );
+    const ordered = useMemo(
+        () =>
+            transactions
+                .filter(
+                    (transaction) =>
+                        !showChildren || !transaction.parentTransactionId,
+                )
+                .sort(
+                    (left, right) =>
+                        (direction === "asc"
+                            ? left.time - right.time
+                            : right.time - left.time) ||
+                        (left.id < right.id ? -1 : left.id > right.id ? 1 : 0),
+                ),
+        [transactions, showChildren, direction],
+    );
+    const parents = useMemo(
+        () => new Map(data?.transactions.map((tx) => [tx.id, tx])),
+        [data?.transactions],
+    );
+    const scroll = useRef<HTMLDivElement>(null);
+    const virtualizer = useVirtualizer({
+        count: ordered.length,
+        getScrollElement: () => scroll.current,
+        estimateSize: () => 112,
+        overscan: 6,
+        getItemKey: (index) => ordered[index].id,
+    });
+    const visible = virtualizer.getVirtualItems();
+    const lastVisible = visible.at(-1)?.index ?? -1;
+    useEffect(() => {
+        if (hasMore && !loading && lastVisible >= ordered.length - 8)
+            onLoadMore?.();
+    }, [hasMore, loading, lastVisible, ordered.length, onLoadMore]);
     return (
-        <div className="relative h-full overflow-y-auto bill-list scrollbar-hidden pb-20">
+        <div
+            ref={scroll}
+            data-virtual-ledger
+            data-loaded-count={ordered.length}
+            className="relative h-full overflow-y-auto bill-list scrollbar-hidden pb-20"
+        >
             <div
                 data-main-ledger
+                style={{ height: virtualizer.getTotalSize() }}
                 className="relative before:block before:absolute before:top-0 before:left-9 before:w-px before:h-full before:bg-foreground/30"
             >
-                {ordered.map((transaction, index) => {
-                    const parent = data?.transactions.find(
-                        (item) => item.id === transaction.parentTransactionId,
+                {visible.map((virtualRow) => {
+                    const index = virtualRow.index,
+                        transaction = ordered[index];
+                    const parent = parents.get(
+                        transaction.parentTransactionId ?? "",
                     );
+                    const rowProps = {
+                        "data-index": index,
+                        "data-transaction-id": transaction.id,
+                        ref: virtualizer.measureElement,
+                        style: {
+                            position: "absolute" as const,
+                            top: 0,
+                            left: 0,
+                            width: "100%",
+                            transform: `translateY(${virtualRow.start}px)`,
+                        },
+                    };
                     let display: TransactionListPresentation;
                     try {
                         display = getTransactionListPresentation(
@@ -102,20 +162,22 @@ export default function TransactionList({
                         );
                     } catch {
                         return (
-                            <button
-                                key={transaction.id}
-                                type="button"
-                                className="p-4 text-sm"
-                                onClick={() => {
-                                    void showTransactionInfo(transaction).catch(
-                                        () => {},
-                                    );
-                                }}
-                            >
-                                {transaction.description ||
-                                    labelTransaction(transaction)}{" "}
-                                · 金额超出显示范围，点击查看分录
-                            </button>
+                            <div key={transaction.id} {...rowProps}>
+                                <button
+                                    type="button"
+                                    className="p-4 text-sm"
+                                    onClick={() => {
+                                        if (!preparing)
+                                            void showTransactionInfo(
+                                                transaction,
+                                            ).catch(() => {});
+                                    }}
+                                >
+                                    {transaction.description ||
+                                        labelTransaction(transaction)}{" "}
+                                    · 金额超出显示范围，点击查看分录
+                                </button>
+                            </div>
                         );
                     }
                     const date = bookDayjs(transaction.time);
@@ -127,10 +189,13 @@ export default function TransactionList({
                     );
                     const fee = display.fee;
                     const openTransaction = () => {
-                        void showTransactionInfo(transaction).catch(() => {});
+                        if (!preparing)
+                            void showTransactionInfo(transaction).catch(
+                                () => {},
+                            );
                     };
                     return (
-                        <Fragment key={transaction.id}>
+                        <div key={transaction.id} {...rowProps}>
                             {(index === 0 ||
                                 !date.isSame(
                                     bookDayjs(ordered[index - 1].time),
@@ -164,10 +229,11 @@ export default function TransactionList({
                                 amount={display.amount.amount ?? 0}
                                 amountTone={display.amount.tone}
                                 amountTitle={t(display.amount.titleKey)}
-                                formattedAmount={formatListAmount(
-                                    display.amount,
-                                    t,
-                                )}
+                                formattedAmount={
+                                    preparing
+                                        ? "…"
+                                        : formatListAmount(display.amount, t)
+                                }
                                 time={transaction.time}
                                 formattedTime={date.format("HH:mm")}
                                 metadata={
@@ -191,12 +257,15 @@ export default function TransactionList({
                                 showTime
                                 onClick={openTransaction}
                             />
-                            {showChildren && !!transaction.children?.length && (
-                                <TransactionChildren
-                                    parent={transaction}
-                                    context={context}
-                                />
-                            )}
+                            {!preparing &&
+                                showChildren &&
+                                !!transaction.children?.length && (
+                                    <TransactionChildren
+                                        parent={transaction}
+                                        context={context}
+                                        disabled={preparing}
+                                    />
+                                )}
                             {fee && (
                                 <BaseBillItem
                                     className="w-full relative"
@@ -209,10 +278,11 @@ export default function TransactionList({
                                     amount={fee.amount.amount ?? 0}
                                     amountTone={fee.amount.tone}
                                     amountTitle={t(fee.amount.titleKey)}
-                                    formattedAmount={formatListAmount(
-                                        fee.amount,
-                                        t,
-                                    )}
+                                    formattedAmount={
+                                        preparing
+                                            ? "…"
+                                            : formatListAmount(fee.amount, t)
+                                    }
                                     time={transaction.time}
                                     formattedTime={date.format("HH:mm")}
                                     metadata={
@@ -226,15 +296,25 @@ export default function TransactionList({
                                     onClick={openTransaction}
                                 />
                             )}
-                        </Fragment>
+                        </div>
                     );
                 })}
-                {!ordered.length && (
+                {!ordered.length && !loading && (
                     <p className="text-xs p-4 text-center">
                         这里还没有记录，点击下方“＋”记一笔。
                     </p>
                 )}
             </div>
+            {(loading || hasMore) && (
+                <button
+                    type="button"
+                    disabled={loading}
+                    onClick={onLoadMore}
+                    className="block w-full p-4 text-sm"
+                >
+                    {loading ? "正在加载账单…" : "加载更多"}
+                </button>
+            )}
         </div>
     );
 }

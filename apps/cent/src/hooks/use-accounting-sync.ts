@@ -7,7 +7,10 @@ import { accountingBooks } from "../sync/accounting";
 /** 页面响应 SDK 账本事件；聚焦或联网时同步。 */
 export function useAccountingSync() {
     const current = useStore(accountingStore, (state) => state.current);
-    const id = current?.book.id;
+    const id = useStore(
+        accountingStore,
+        (state) => state.current?.book.id ?? state.preview?.book.id,
+    );
     const remoteId = current?.remoteId;
     const provider = current?.remoteProvider ?? "webdav";
     useEffect(() => {
@@ -35,7 +38,8 @@ export function useAccountingSync() {
         };
         const unsubscribe = accountingBooks.onChange(({ bookId, source }) => {
             const state = accountingStore.getState();
-            if (bookId !== state.current?.book.id) return;
+            if (bookId !== (state.current?.book.id ?? state.preview?.book.id))
+                return;
             // Own saves apply their committed snapshot; foreground sync refreshes once
             // at completion. Other-tab changes must still be read after any local save.
             if (source === "local" && state.busy) return;

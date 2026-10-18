@@ -1,3 +1,4 @@
+import { sameStateVersion } from "@glink25/sync-sdk";
 import { createStore } from "zustand/vanilla";
 import type {
     AccountingBook,
@@ -18,6 +19,7 @@ import {
     AccountingSyncConflictError,
     accountingBooks,
 } from "../sync/accounting";
+import type { AccountingBookPage } from "../sync/book-page";
 import { createDefaultAccountingData } from "./default-accounting-data";
 
 export const ACTIVE_BOOK_KEY = "cent-accounting-active-book";
@@ -45,6 +47,7 @@ const withTradingHierarchy = (
 export interface AccountingStore {
     books: AccountingBook[];
     current?: LoadedAccountingBook;
+    preview?: AccountingBookPage;
     ready: boolean;
     busy: boolean;
     syncing: boolean;
@@ -84,7 +87,8 @@ export function createAccountingStore(
     booksService: Pick<
         AccountingBooks,
         "listBooks" | "openBook" | "createBook" | "saveBook"
-    >,
+    > &
+        Partial<Pick<AccountingBooks, "readBookPage">>,
 ) {
     let queue: Promise<void> = Promise.resolve();
     let syncQueue: Promise<void> = Promise.resolve();
@@ -104,12 +108,14 @@ export function createAccountingStore(
                     if (error instanceof AccountingProjectionError)
                         set({
                             current: undefined,
+                            preview: undefined,
                             ready: false,
                             conflict: undefined,
                         });
                     if (error instanceof AccountingSyncConflictError)
                         set({
                             current: undefined,
+                            preview: undefined,
                             ready: true,
                             conflict: error,
                         });
@@ -135,6 +141,14 @@ export function createAccountingStore(
         const apply = (current: LoadedAccountingBook) =>
             set({
                 conflict: undefined,
+                preview:
+                    get().preview?.book.id === current.book.id &&
+                    sameStateVersion(
+                        get().preview!.book.version,
+                        current.book.version,
+                    )
+                        ? get().preview
+                        : undefined,
                 ...(get().current?.book.id !== current.book.id
                     ? { syncError: undefined }
                     : {}),
@@ -151,6 +165,26 @@ export function createAccountingStore(
                       )
                     : [...get().books, current.book],
             });
+        const open = async (id: string) => {
+            if (booksService.readBookPage && get().current?.book.id !== id) {
+                try {
+                    const preview = await booksService.readBookPage(id);
+                    set({ preview, current: undefined });
+                    // Give the first indexed page a paint before preparing the full ledger.
+                    await new Promise<void>((resolve) => {
+                        const timer = setTimeout(resolve, 50);
+                        if (typeof requestAnimationFrame === "function")
+                            requestAnimationFrame(() => {
+                                clearTimeout(timer);
+                                setTimeout(resolve, 0);
+                            });
+                    });
+                } catch {
+                    // Full opening reports conflicts/projection failures with their existing UI.
+                }
+            }
+            apply(await booksService.openBook(id));
+        };
         const refreshAfterSync = (id: string, requestedSelection: number) =>
             run(async () => {
                 if (selection !== requestedSelection) return;
@@ -199,8 +233,7 @@ export function createAccountingStore(
                                 throw error;
                             apply(await booksService.openBook("main"));
                         }
-                    } else if (selected)
-                        apply(await booksService.openBook(selected.id));
+                    } else if (selected) await open(selected.id);
                     set({ ready: true });
                 }).finally(() => {
                     initialization = undefined;
@@ -210,7 +243,7 @@ export function createAccountingStore(
             selectBook: (id) => {
                 selection++;
                 return run(async () => {
-                    apply(await booksService.openBook(id));
+                    await open(id);
                 });
             },
             addBook: (id, name, now, data) => {

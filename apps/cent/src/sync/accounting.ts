@@ -1,6 +1,7 @@
 import {
     type Change,
     createSyncSDK,
+    type QueryCursor,
     type RemoteBinding,
     type RemoteTransport,
     type StateVersion,
@@ -29,6 +30,7 @@ import {
     validateAccountingData,
 } from "../ledger/accounting";
 import { isBookFolder } from "./book-folder";
+import { readLedgerPage } from "./book-page";
 import {
     ledgerRecordChanges,
     ledgerValue,
@@ -353,6 +355,32 @@ export function createAccountingBooks(
     return {
         listBooks,
         openBook,
+        async readBookPage(id: string, cursor?: QueryCursor) {
+            const sdk = handle(id);
+            const state = await sdk.config.getState();
+            const [record, meta, updatedAt] = await Promise.all([
+                sdk.store.get(BOOK, "info"),
+                sdk.store.get<AccountingMeta>(META, "info"),
+                sdk.config.get<number>("updatedAt"),
+            ]);
+            const info = infoOf(record);
+            if (!meta?.value) throw new Error("账本元数据缺失。");
+            return readLedgerPage(
+                sdk,
+                {
+                    id,
+                    name: info.name,
+                    version: stateVersion(state),
+                    createdAt: info.createdAt,
+                    updatedAt: Math.max(
+                        info.createdAt,
+                        updatedAt ?? info.createdAt,
+                    ),
+                },
+                meta.value,
+                cursor,
+            );
+        },
         sync,
         syncAll,
         get provider() {

@@ -23,7 +23,10 @@ import { useAccountingView } from "./use-accounting-view";
 export const useCurrency = () => {
     const settings = useStore(
         accountingStore,
-        (s) => s.current?.data.currencySettings ?? defaultCurrencySettings,
+        (s) =>
+            s.current?.data.currencySettings ??
+            s.preview?.data.currencySettings ??
+            defaultCurrencySettings,
     );
     const bookId = useStore(accountingStore, (s) => s.current?.book.id);
     const data = useStore(accountingStore, (s) => s.current?.data);

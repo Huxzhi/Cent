@@ -1,11 +1,11 @@
-import type { HtmlHTMLAttributes, ReactNode } from "react";
+import type { ButtonHTMLAttributes, ReactNode } from "react";
 import { cn } from "@/utils";
 
 export function BaseButton({
     children,
     className,
     ...props
-}: { children?: ReactNode } & HtmlHTMLAttributes<HTMLButtonElement>) {
+}: { children?: ReactNode } & ButtonHTMLAttributes<HTMLButtonElement>) {
     return (
         <button
             type="button"

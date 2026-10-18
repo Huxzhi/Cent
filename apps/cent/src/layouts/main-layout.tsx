@@ -41,7 +41,7 @@ export default function MainLayout() {
 
 function AccountingLayout({ selected }: { selected: SyncEndpoint }) {
     useAccountingSync();
-    const { ready, current, busy, error, conflict, initialize } =
+    const { ready, current, preview, busy, error, conflict, initialize } =
         useStore(accountingStore);
     const [startupError, setStartupError] = useState<string>();
     const initializeBook = useCallback(async () => {
@@ -65,8 +65,8 @@ function AccountingLayout({ selected }: { selected: SyncEndpoint }) {
     useEffect(() => {
         void initializeBook();
     }, [initializeBook]);
-    const needsSelection = selected !== "offline" && !current;
-    const bookId = current?.book.id;
+    const needsSelection = selected !== "offline" && !current && !preview;
+    const bookId = current?.book.id ?? preview?.book.id;
     useEffect(() => {
         if (!bookId || needsSelection) return;
         try {
@@ -79,9 +79,9 @@ function AccountingLayout({ selected }: { selected: SyncEndpoint }) {
                 <AccountingSyncConflicts />
             ) : ready && needsSelection ? (
                 <AccountingBookPicker />
-            ) : ready && current ? (
+            ) : current || preview ? (
                 <>
-                    <Navigation />
+                    <Navigation disabled={!current} />
                     <div className="w-full h-full sm:pl-18">
                         <Outlet />
                     </div>

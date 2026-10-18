@@ -7,6 +7,7 @@ import type { ExportedJSON } from "@/ledger/type";
 import { t, useIntl } from "@/locale";
 import { measure } from "@/measurement";
 import { readClipboard } from "@/utils/clipboard";
+import { isCancelError } from "../confirm/state";
 import modal from "../modal";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -130,24 +131,30 @@ export function SmartImport({ onCancel }: { onCancel?: () => void }) {
         if (!data) {
             return;
         }
-        const res = await showImportPreview({
-            bills: data.items,
-            meta: data.meta,
-        });
-        if (!res) {
-            return;
-        }
-        if (res.strategy === "overlap") {
-            // 智能导入时，需要
-        }
-        await importFromPreviewResult(res);
-        if (res.bills.length > 0) {
-            measure("bill_created", {
-                source: "import",
-                item_count: res.bills.length,
+        try {
+            const res = await showImportPreview({
+                bills: data.items,
+                meta: data.meta,
             });
+            if (!res) {
+                return;
+            }
+            await importFromPreviewResult(res);
+            if (res.bills.length > 0) {
+                measure("bill_created", {
+                    source: "import",
+                    item_count: res.bills.length,
+                });
+            }
+            onCancel?.();
+        } catch (error) {
+            if (!isCancelError(error)) {
+                const message =
+                    error instanceof Error ? error.message : String(error);
+                setErrorInfo(message);
+                toast.error(message);
+            }
         }
-        onCancel?.();
     };
     return (
         <PopupLayout
@@ -298,93 +305,24 @@ export function SmartImport({ onCancel }: { onCancel?: () => void }) {
 }
 
 const runCode = (code: string, file: File) => {
-    // 1. 验证和清理
-    const transformCode = code.trim();
-
-    // 2. 动态 Worker 脚本生成
-    const workerScriptContent = `
-                      // 引入 PapaParse 和 XLSX 库的 CDN 地址
-                      importScripts(
-                          'https://cdn.jsdelivr.net/npm/papaparse@5.5.3/papaparse.min.js',
-                          'https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js'
-                      );
-
-                      // --- 暴露依赖 (Papa/XLSX) ---
-                      const ctx = {
-                          Papa: self.Papa, 
-                          XLSX: self.XLSX
-                      };
-
-                      // --- 核心转换函数 (用户输入) ---
-                      ${transformCode}
-
-                      // Web Worker 接收消息的监听器，使用 async/await 来安全地处理 transform 函数的返回值
-                      self.onmessage = async (e) => {
-                          const { fileContent, fileName, DefaultCategories } = e.data;
-                          ctx.DefaultCategories = DefaultCategories;
-                          // 确保 transform 函数存在
-                          if (typeof transform === 'function') {
-                              let result;
-                              try {
-                                  // 使用 await 来确保等待 transform 函数（无论是同步还是异步）的最终结果
-                                  result = await transform(fileContent, ctx);
-                                  
-                                  // 检查返回结果是否是 Promise，如果是，则说明 await 失败或用户返回了未解析的 Promise
-                                  if (result && typeof result.then === 'function') {
-                                       self.postMessage({ error: true, message: "Worker: transform 函数返回了一个未解析的 Promise。请确保返回一个普通对象。", data: [] });
-                                       return; // 阻止后续代码执行
-                                  }
-
-                              } catch (error) {
-                                console.error(error)
-                                  // 捕获 transform 函数执行过程中抛出的同步或异步错误
-                                  result = { error: true, message: "Worker: transform 函数执行异常: " + error.message, data: [] };
-                              }
-                              
-                              // 发送最终的可克隆结果对象
-                              self.postMessage(result);
-                              
-                          } else {
-                               self.postMessage({ error: true, message: "Worker: 用户输入的代码中未定义名为 'transform' 的函数。", data: [] });
-                          }
-                      };
-                  `;
-
-    // 3. Worker 创建和设置
-    const workerBlob = new Blob([workerScriptContent], {
-        type: "application/javascript",
-    });
-    const workerUrl = URL.createObjectURL(workerBlob);
-    const currentWorker = new Worker(workerUrl);
-    return new Promise((resolve, reject) => {
-        // 监听 Worker 的返回结果
-        currentWorker.onmessage = (e) => {
-            const result = e.data;
-
-            if (result.error) {
-                reject(result.message);
-            } else {
-                resolve(result);
-            }
-            // 清理 URL 对象
-            URL.revokeObjectURL(workerUrl);
+    const worker = new Worker(
+        new URL("./transform.worker.ts", import.meta.url),
+        { type: "module" },
+    );
+    return new Promise<unknown>((resolve, reject) => {
+        worker.onmessage = (event) => {
+            worker.terminate();
+            if (event.data?.error) reject(new Error(event.data.message));
+            else resolve(event.data);
         };
-
-        // 监听 Worker 错误
-        currentWorker.onerror = (e) => {
-            console.error("Worker Error:", e);
-            reject(e);
-            // 清理 URL 对象
-            URL.revokeObjectURL(workerUrl);
+        worker.onerror = (event) => {
+            event.preventDefault();
+            worker.terminate();
+            reject(new Error(event.message || "导入解析器加载失败。"));
         };
-
-        const fileContent = file;
-        const fileName = file.name;
-
-        // 将数据发送到 Worker
-        currentWorker.postMessage({
-            fileContent,
-            fileName,
+        worker.postMessage({
+            code: code.trim(),
+            file,
             DefaultCategories: BillCategories,
         });
     });

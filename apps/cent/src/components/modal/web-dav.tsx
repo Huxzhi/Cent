@@ -51,7 +51,11 @@ const LoadingForm = ({
     const form = useForm<z.infer<typeof formSchema>>({
         resolver: zodResolver(formSchema) as any,
         defaultValues: {
-            proxy: "", //"https://oncent-backend.linkai.work/proxy?url=",
+            remote: edit?.remote ?? "",
+            username: edit?.username ?? "",
+            password: edit?.password ?? "",
+            proxy: edit?.proxy ?? "",
+            customUserName: edit?.customUserName ?? "",
         },
     });
     const [checking, setChecking] = useState(false);

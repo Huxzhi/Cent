@@ -1,8 +1,10 @@
 import type { ReactNode } from "react";
 import { toast } from "sonner";
 import { StorageAPI } from "@/api/storage";
+import { SYNC_ENDPOINT_KEY } from "@/api/storage/selection";
 import PopupLayout from "@/layouts/popup-layout";
 import { useIntl } from "@/locale";
+import { ACTIVE_BOOK_KEY } from "@/store/accounting";
 import { useUserStore } from "@/store/user";
 import { showAccountingBooks } from "../accounting/book-manager";
 import TagSettingsItem from "../bill-tag";
@@ -10,7 +12,6 @@ import { BookSettings } from "../book";
 import Budget from "../budget";
 import CurrencySettingsItem from "../currency";
 import DataManagerSettingsItem from "../data-manager";
-import modal from "../modal";
 import ScheduledSettingsItems from "../scheduled/settings-item";
 import SponsorBanner, { SponsorProvider } from "../sponsor";
 import { Button } from "../ui/button";
@@ -28,7 +29,6 @@ import ThemeSettingsItem from "./theme";
 import TimeZoneSettingsItem from "./time-zone";
 import UserSettingsItem from "./user";
 import VoiceSettingsItem from "./voice";
-import ZenSettingsItem from "./zen";
 
 // 复用原设置项的外观；未迁移的操作不能写入旧 Bill 账本。
 function PendingBookFeature({ children }: { children: ReactNode }) {
@@ -49,19 +49,10 @@ function PendingBookFeature({ children }: { children: ReactNode }) {
 function UserInfo() {
     const t = useIntl();
     const { id, avatar_url, name, expired } = useUserStore();
-    const toLogOut = async () => {
-        await modal.prompt({ title: t("logout-warning") });
-
-        await Promise.all([
-            StorageAPI.logout(),
-            new Promise<void>((res) => {
-                setTimeout(() => {
-                    res();
-                }, 100);
-            }),
-        ]);
-        localStorage.clear();
-        sessionStorage.clear();
+    const switchAccount = async () => {
+        await StorageAPI.logout();
+        localStorage.removeItem(SYNC_ENDPOINT_KEY);
+        localStorage.removeItem(ACTIVE_BOOK_KEY);
         location.reload();
     };
     return (
@@ -105,8 +96,8 @@ function UserInfo() {
                         {t("re-login")}
                     </Button>
                 )}
-                <Button size="sm" variant="destructive" onClick={toLogOut}>
-                    {t("logout")}
+                <Button size="sm" variant="outline" onClick={switchAccount}>
+                    {t("switch-account")}
                 </Button>
             </div>
         </div>
@@ -154,13 +145,7 @@ export default function SettingsForm({
                             <PendingBookFeature>
                                 <UserSettingsItem />
                             </PendingBookFeature>
-                            <DataManagerSettingsItem
-                                onOpen={() => {
-                                    void showAccountingBooks("data").catch(
-                                        () => {},
-                                    );
-                                }}
-                            />
+                            <DataManagerSettingsItem />
                         </div>
                     </div>
                     <div>
@@ -168,9 +153,6 @@ export default function SettingsForm({
                         <div className="flex flex-col divide-y">
                             <PendingBookFeature>
                                 <AssistantSettingsItem />
-                            </PendingBookFeature>
-                            <PendingBookFeature>
-                                <ZenSettingsItem />
                             </PendingBookFeature>
                             <PendingBookFeature>
                                 <AgentApiSettingsItem />

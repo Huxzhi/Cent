@@ -1,98 +1,51 @@
-import { cloneDeep, isEqual, merge } from "lodash-es";
-import { useEffect, useRef, useState } from "react";
-import { StorageAPI } from "@/api/storage";
-import type { Action, Full, MetaUpdate, Update } from "@/database/stash";
-import PopupLayout from "@/layouts/popup-layout";
-import { BillCategories } from "@/ledger/category";
-import type { Bill, GlobalMeta } from "@/ledger/type";
-import { appendCategories } from "@/ledger/utils";
-import { useIntl } from "@/locale";
-import { useBookStore } from "@/store/book";
-import { useLedgerStore } from "@/store/ledger";
-import { useUserStore } from "@/store/user";
-import type { ZenPost } from "@/zen/types";
+import { importBillsToAccounting } from "../../ledger/accounting/import-bills";
+import { accountingStore } from "../../store/accounting";
 import createConfirmProvider from "../confirm";
+import { prepareBillImages } from "./import-images";
 import { PreviewForm, type PreviewState } from "./preview";
 
-export const [ImportPreviewProvider, showImportPreview] = createConfirmProvider(
-    PreviewForm,
-    {
-        dialogTitle: "experimental-functions",
-        dialogModalClose: true,
-        contentClassName:
-            "h-full w-full max-h-full max-w-full rounded-none sm:rounded-md sm:max-h-[min(520px,calc(100vh-32px))] sm:w-[90vw] sm:max-w-[500px]",
-    },
-);
+const [ImportPreviewProvider, openPreview] = createConfirmProvider<
+    PreviewState,
+    PreviewState
+>(PreviewForm, {
+    dialogTitle: "accounting-bill-import-preview",
+    dialogModalClose: true,
+    contentClassName:
+        "h-full w-full max-h-full max-w-full rounded-none sm:rounded-md sm:max-h-[min(640px,calc(100vh-32px))] sm:w-[90vw] sm:max-w-[560px]",
+});
+export { ImportPreviewProvider };
+export async function showImportPreview(input: PreviewState) {
+    const current = accountingStore.getState().current;
+    if (!current) throw new Error("请先选择账本。");
+    const bills = await prepareBillImages(input.bills);
+    return openPreview({
+        ...input,
+        bills,
+        bookId: current.book.id,
+        revision: current.book.revision,
+    });
+}
 
-export const importFromPreviewResult = async (res: PreviewState) => {
-    const { strategy, asMine, zenPosts, ...rest } = res;
-    const currentMeta = cloneDeep(
-        useLedgerStore.getState().infos?.meta ?? ({} as GlobalMeta),
-    );
-    const newMeta =
-        strategy === "overlap"
-            ? rest.meta
-            : (() => {
-                  if (!rest.meta?.categories) {
-                      const merged = merge(currentMeta, rest.meta);
-                      return merged;
-                  }
-                  const currentCategories =
-                      (currentMeta.categories?.length ?? 0) === 0
-                          ? BillCategories
-                          : currentMeta.categories!;
-                  const incomingCategories = [...(rest.meta?.categories ?? [])];
-                  // 必须用深拷贝否则会被merge改变
-                  const appended = cloneDeep(
-                      appendCategories(currentCategories, incomingCategories),
-                  );
-                  const merged = merge(currentMeta, rest.meta);
-                  if (isEqual(BillCategories, appended)) {
-                      merged.categories = undefined;
-                  } else {
-                      merged.categories = appended;
-                  }
-                  return merged;
-              })();
-    const bookId = useBookStore.getState().currentBookId;
-    if (!bookId) {
-        return;
-    }
-    const mineId = useUserStore.getState().id;
-    await StorageAPI.batch(
-        bookId,
-        [
-            ...rest.bills.map((v) => {
-                return {
-                    id: v.id,
-                    type: "update",
-                    value: { ...v, creatorId: asMine ? mineId : v.creatorId },
-                    timestamp: v.__update_at,
-                } as Update<Bill>;
-            }),
-            {
-                type: "meta",
-                metaValue: newMeta,
-            } as MetaUpdate,
-        ],
-        strategy === "overlap",
-    );
-    if (zenPosts !== undefined) {
-        let actions: Action<ZenPost>[] = zenPosts.map((post) => ({
-            type: "update" as const,
-            value: post,
-            timestamp: post.__update_at,
-        }));
-        if (strategy === "overlap" && actions.length === 0) {
-            const existing = await StorageAPI.getAllZenItems(bookId);
-            actions = existing.map((post) => ({
-                type: "delete" as const,
-                value: post.id,
-                timestamp: Date.now(),
-            }));
-        }
-        if (actions.length > 0) {
-            await StorageAPI.batchZen(bookId, actions, strategy === "overlap");
-        }
-    }
-};
+export async function importFromPreviewResult(result: PreviewState) {
+    if (!result.assetAccountId && !result.assetAccountIds)
+        throw new Error("请先选择资产账户。");
+    const state = accountingStore.getState();
+    if (!result.bookId || state.current?.book.id !== result.bookId)
+        throw new Error("账本已切换，请重新预览导入。");
+    await state.updateData((data) => {
+        const current = accountingStore.getState().current;
+        if (
+            !current ||
+            current.book.id !== result.bookId ||
+            current.book.revision !== result.revision
+        )
+            throw new Error("账本已变化，请重新预览导入。");
+        return importBillsToAccounting(
+            data,
+            result.bills,
+            result.meta,
+            result.assetAccountIds ?? result.assetAccountId!,
+            Date.now(),
+        ).data;
+    }, Date.now());
+}

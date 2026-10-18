@@ -1,3 +1,4 @@
+import { createId } from "@glink25/sync-sdk";
 import { useState } from "react";
 import { useStore } from "zustand";
 import {
@@ -10,12 +11,22 @@ import { Input } from "../ui/input";
 import { useAccountingLabels } from "./i18n";
 import { Field, FormError, Modal, useFormAction } from "./shared";
 
-export default function DataManager({ onClose }: { onClose: () => void }) {
+export default function DataManager({
+    onClose,
+    initialData,
+    initialName,
+}: {
+    onClose: () => void;
+    initialData?: AccountingData;
+    initialName?: string;
+}) {
     const { t } = useAccountingLabels();
     const { current, busy } = useStore(accountingStore);
-    const [candidate, setCandidate] = useState<AccountingData>();
+    const [candidate, setCandidate] = useState<AccountingData | undefined>(
+        initialData,
+    );
     const [bookName, setBookName] = useState(
-        t("accounting-imported-book-name"),
+        initialName ?? t("accounting-imported-book-name"),
     );
     const [reading, setReading] = useState(false);
     const [readError, setReadError] = useState<string>();
@@ -58,7 +69,7 @@ export default function DataManager({ onClose }: { onClose: () => void }) {
                         await accountingStore
                             .getState()
                             .addBook(
-                                crypto.randomUUID(),
+                                createId(),
                                 bookName.trim(),
                                 Date.now(),
                                 candidate,

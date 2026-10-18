@@ -33,11 +33,13 @@ export interface LoadedAccountingBook {
     book: AccountingBook;
     data: AccountingData;
     remoteId?: string;
+    remoteProvider?: string;
     pendingSync?: boolean;
 }
 export type AccountingSnapshot = StashSnapshot<AccountingItem, AccountingMeta>;
 export interface AccountingSyncState {
     remoteId: string;
+    provider?: string;
     baseline: AccountingSnapshot;
     generation: string;
 }
@@ -235,6 +237,8 @@ export class IndexedDBAccountingRepository implements AccountingRepository {
                 ...(config?.value.sync
                     ? {
                           remoteId: config.value.sync.remoteId,
+                          remoteProvider:
+                              config.value.sync.provider ?? "github",
                           pendingSync: actions.length > 0,
                       }
                     : {}),
@@ -419,6 +423,8 @@ export class IndexedDBAccountingRepository implements AccountingRepository {
                 ...(config?.value.sync
                     ? {
                           remoteId: config.value.sync.remoteId,
+                          remoteProvider:
+                              config.value.sync.provider ?? "github",
                           pendingSync:
                               previousStashes.length > 0 || actions.length > 0,
                       }
@@ -461,6 +467,7 @@ export class IndexedDBAccountingRepository implements AccountingRepository {
         snapshot: AccountingSyncSnapshot,
         remoteId: string,
         baseline: AccountingSnapshot,
+        provider?: string,
     ) {
         const db = await this.open(snapshot.book.id);
         const tx = db.transaction(stores, "readwrite");
@@ -473,6 +480,7 @@ export class IndexedDBAccountingRepository implements AccountingRepository {
             await tx.objectStore("__config").put(
                 configRecord(book, {
                     remoteId,
+                    ...(provider ? { provider } : {}),
                     baseline,
                     generation: crypto.randomUUID(),
                 }),
@@ -530,6 +538,9 @@ export class IndexedDBAccountingRepository implements AccountingRepository {
             });
             const sync = {
                 remoteId,
+                ...(snapshot.sync?.provider
+                    ? { provider: snapshot.sync.provider }
+                    : {}),
                 baseline: remote,
                 generation: crypto.randomUUID(),
             };
@@ -549,7 +560,13 @@ export class IndexedDBAccountingRepository implements AccountingRepository {
                 ),
             ]);
             await tx.done;
-            return { book, data, remoteId, pendingSync: pending.length > 0 };
+            return {
+                book,
+                data,
+                remoteId,
+                remoteProvider: sync.provider ?? "github",
+                pendingSync: pending.length > 0,
+            };
         } catch (error) {
             await abortWrite(tx);
             throw error;

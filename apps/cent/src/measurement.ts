@@ -108,7 +108,7 @@ export type MeasurementEventMap = {
     };
     assistant_request_started: undefined;
     ai_token_usage: {
-        feature: "assistant" | "zen";
+        feature: "assistant";
         measurement: "estimated";
         api_type: TokenUsageApiType;
         input_range: TokenRange;
@@ -117,16 +117,6 @@ export type MeasurementEventMap = {
         request_count_range: "zero" | "1" | "2_3" | "4_7" | "gte_8";
         outcome: "completed" | "interrupted" | "failed";
     };
-    zen_status: {
-        enabled: boolean;
-    };
-    zen_setting_changed: {
-        enabled: boolean;
-    };
-    zen_opened: {
-        state: "ready" | "manual";
-    };
-    zen_completed: undefined;
     usage_snapshot_metric: {
         metric: UsageMetric;
         bucket: UsageBucket;

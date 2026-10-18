@@ -1,11 +1,17 @@
-/** biome-ignore-all lint/a11y/noSvgWithoutTitle: <explanation> */
 import { useEffect } from "react";
 import { createPortal } from "react-dom";
+import { toast } from "sonner";
 import { useShallow } from "zustand/shallow";
+import {
+    getSelectedSyncEndpoint,
+    SYNC_ENDPOINTS,
+    type SyncEndpoint,
+} from "@/api/storage/selection";
 import {
     AppDownloadIcons,
     useLoginAppDownloadPlatforms,
 } from "@/components/app-download";
+import { isCancelError } from "@/components/confirm/state";
 import { useIntl } from "@/locale";
 import { isMeasurementEnabled, measure } from "@/measurement";
 import { useIsLogin, useUserStore } from "@/store/user";
@@ -17,30 +23,38 @@ const loadStorageAPI = async () => {
     return lib.StorageAPI;
 };
 
-const primaryButtonStyle = `inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring cursor-pointer disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 bg-primary text-primary-foreground shadow hover:bg-primary/90 h-9 px-4 py-2`;
+async function startLogin(method: SyncEndpoint) {
+    try {
+        const StorageAPI = await loadStorageAPI();
+        await StorageAPI.loginWith(method);
+    } catch (error) {
+        if (!isCancelError(error)) {
+            toast.error(error instanceof Error ? error.message : String(error));
+        }
+    }
+}
 
 const secondaryButtonStyle = `inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring cursor-pointer disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 bg-secondary text-secondary-foreground shadow-sm hover:bg-secondary/80 h-9 px-4 py-2 w-full`;
 
 const betaClassName = `relative after:content-['beta'] after:rounded after:bg-yellow-400 after:px-[2px] after:text-[8px] after:block after:absolute after:top-0 after:right-0 after:translate-x-[calc(50%)]`;
 
-const LOGIN_METHODS = ["github", "gitee", "webdav", "s3", "offline"] as const;
-type LoginMethod = (typeof LOGIN_METHODS)[number];
 let loginMethodMeasured = false;
 
-function isLoginMethod(value: string): value is LoginMethod {
-    return (LOGIN_METHODS as readonly string[]).includes(value);
+function isLoginMethod(value: string): value is SyncEndpoint {
+    return (SYNC_ENDPOINTS as readonly string[]).includes(value);
 }
 
 export default function Login() {
     const t = useIntl();
     const isLogin = useIsLogin();
+    const selected = getSelectedSyncEndpoint();
     const [loading] = useUserStore(
         useShallow((state) => {
             return [state.loading];
         }),
     );
     useEffect(() => {
-        if (!isLogin || loginMethodMeasured) return;
+        if (!selected || !isLogin || loginMethodMeasured) return;
         loginMethodMeasured = true;
         void loadStorageAPI()
             .then((StorageAPI) => {
@@ -50,17 +64,25 @@ export default function Login() {
                 }
             })
             .catch(() => {});
-    }, [isLogin]);
-    if (isLogin) {
+    }, [isLogin, selected]);
+    if (selected) {
         return null;
     }
     return createPortal(
         <div className="fixed z-[1] top-0 right-0 w-screen h-screen overflow-hidden">
             <div className="absolute w-full h-full bg-[rgba(0,0,0,0.5)] z-[-1]"></div>
             <div className="w-full h-full flex justify-center items-center">
-                <div className="bg-background w-[350px] h-[560px] max-h-[calc(100%-40px)] flex flex-col gap-4 justify-center items-center rounded-lg overflow-y-auto">
+                <div className="bg-background w-[350px] max-w-[calc(100vw-2rem)] h-[660px] max-h-[calc(100dvh-2rem)] flex flex-col gap-4 items-center rounded-lg overflow-y-auto">
                     <Guide />
                     <div className="min-h-20 h-fit flex flex-col gap-4">
+                        <div className="text-center">
+                            <h2 className="font-semibold">
+                                {t("choose-sync-method")}
+                            </h2>
+                            <p className="text-xs text-muted-foreground mt-1 max-w-64">
+                                {t("choose-sync-method-tip")}
+                            </p>
+                        </div>
                         {loading ? (
                             <div>
                                 <i className="icon-[mdi--loading] animate-spin"></i>
@@ -68,103 +90,31 @@ export default function Login() {
                             </div>
                         ) : (
                             <>
-                                {/* Github */}
-                                <div className="flex flex-col gap-1">
-                                    <button
-                                        type="button"
-                                        className={`${primaryButtonStyle}`}
-                                        onClick={async () => {
-                                            const StorageAPI =
-                                                await loadStorageAPI();
-                                            StorageAPI.loginWith("github");
-                                        }}
-                                    >
-                                        <i className="icon-[mdi--github]"></i>
-                                        <div className="flex-1">
-                                            {t("login-to-github")}
-                                        </div>
-                                    </button>
-                                    <button
-                                        type="button"
-                                        className="underline text-xs cursor-pointer"
-                                        onClick={async () => {
-                                            const StorageAPI =
-                                                await loadStorageAPI();
-                                            StorageAPI.loginManuallyWith(
-                                                "github",
-                                            );
-                                        }}
-                                    >
-                                        {t("or-use-an-exist-token")}
-                                    </button>
-                                </div>
-                                {/* Gitee */}
-                                <div className="flex flex-col gap-1">
-                                    <button
-                                        type="button"
-                                        className={`${primaryButtonStyle} !bg-[#b7312d] !hover:bg-[#b7312d]/80`}
-                                        onClick={async () => {
-                                            const StorageAPI =
-                                                await loadStorageAPI();
-                                            StorageAPI.loginWith("gitee");
-                                        }}
-                                    >
-                                        <svg
-                                            fill="currentColor"
-                                            width="32"
-                                            height="32"
-                                            viewBox="0 0 24 24"
-                                            role="img"
-                                            xmlns="http://www.w3.org/2000/svg"
-                                        >
-                                            <path d="M11.984 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0a12 12 0 0 0-.016 0zm6.09 5.333c.328 0 .593.266.592.593v1.482a.594.594 0 0 1-.593.592H9.777c-.982 0-1.778.796-1.778 1.778v5.63c0 .327.266.592.593.592h5.63c.982 0 1.778-.796 1.778-1.778v-.296a.593.593 0 0 0-.592-.593h-4.15a.592.592 0 0 1-.592-.592v-1.482a.593.593 0 0 1 .593-.592h6.815c.327 0 .593.265.593.592v3.408a4 4 0 0 1-4 4H5.926a.593.593 0 0 1-.593-.593V9.778a4.444 4.444 0 0 1 4.445-4.444h8.296z" />
-                                        </svg>
-                                        <div className="flex-1">
-                                            {t("login-to-gitee")}
-                                        </div>
-                                    </button>
-                                    <button
-                                        type="button"
-                                        className="underline text-xs cursor-pointer"
-                                        onClick={async () => {
-                                            const StorageAPI =
-                                                await loadStorageAPI();
-                                            StorageAPI.loginManuallyWith(
-                                                "gitee",
-                                            );
-                                        }}
-                                    >
-                                        {t("or-use-an-exist-token")}
-                                    </button>
-                                </div>
                                 {/* Web DAV */}
                                 <div>
                                     <button
                                         type="button"
                                         className={`${secondaryButtonStyle} ${betaClassName}`}
-                                        onClick={async () => {
-                                            const StorageAPI =
-                                                await loadStorageAPI();
-                                            StorageAPI.loginWith("webdav");
-                                        }}
+                                        aria-label="WebDAV"
+                                        onClick={() =>
+                                            void startLogin("webdav")
+                                        }
                                     >
                                         <i className="icon-[mdi--floppy-disk]"></i>
-                                        <div className="flex-1">Web DAV</div>
+                                        <div className="flex-1">WebDAV</div>
                                     </button>
                                 </div>
-                                {/* S3 */}
                                 <div>
                                     <button
                                         type="button"
-                                        className={`${secondaryButtonStyle} ${betaClassName}`}
-                                        onClick={async () => {
-                                            const StorageAPI =
-                                                await loadStorageAPI();
-                                            StorageAPI.loginWith("s3");
-                                        }}
+                                        className={secondaryButtonStyle}
+                                        aria-label="GitHub"
+                                        onClick={() =>
+                                            void startLogin("github")
+                                        }
                                     >
-                                        <i className="icon-[mdi--database]"></i>
-                                        <div className="flex-1">S3</div>
+                                        <i className="icon-[mdi--github]"></i>
+                                        <div className="flex-1">GitHub</div>
                                     </button>
                                 </div>
                                 {/* Offline */}
@@ -172,11 +122,9 @@ export default function Login() {
                                     <button
                                         type="button"
                                         className={`${secondaryButtonStyle} !w-full`}
-                                        onClick={async () => {
-                                            const StorageAPI =
-                                                await loadStorageAPI();
-                                            StorageAPI.loginWith("offline");
-                                        }}
+                                        onClick={() =>
+                                            void startLogin("offline")
+                                        }
                                     >
                                         <i className="icon-[mdi--local]"></i>
                                         <div className="flex-1">
@@ -217,7 +165,7 @@ export default function Login() {
     );
 }
 
-function Guide({ className }: { className?: string }) {
+function Guide() {
     const t = useIntl();
     const platforms = useLoginAppDownloadPlatforms();
 

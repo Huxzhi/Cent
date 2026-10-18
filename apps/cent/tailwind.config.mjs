@@ -5,12 +5,11 @@ module.exports = {
     content: [
         "./src/**/*.{js,ts,jsx,tsx}",
         "!./docs/**/*",
-        // 直接扫描 chaty / zen 的源码：cent 用自己这一份 Tailwind 统一生成三个包的
+        // 直接扫描 chaty / toast 的源码：cent 用自己这一份 Tailwind 统一生成三个包的
         // 工具类，源码内单次构建，彻底避免引入第二份编译后的 Tailwind（重复打包 +
         // cascade layer 冲突的根因）。
         "../../packages/chaty/src/**/*.{js,ts,jsx,tsx}",
         "../../packages/toast/src/**/*.{js,ts,jsx,tsx}",
-        "../../packages/zen/src/**/*.{js,ts,jsx,tsx}",
     ],
     theme: {
         extend: {

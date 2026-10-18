@@ -1,7 +1,4 @@
-import {
-    getChildTransactions,
-    type Transaction,
-} from "../../ledger/accounting";
+import type { Transaction } from "../../ledger/accounting";
 import {
     getTransactionListPresentation,
     type TransactionListContext,
@@ -21,17 +18,15 @@ import {
 /** 关联记录复用主条目的展示规则，只使用紧凑布局。 */
 export default function TransactionChildren({
     parent,
-    transactions,
     context,
     nested = false,
 }: {
     parent: Transaction;
-    transactions: Transaction[];
     context: TransactionListContext;
     nested?: boolean;
 }) {
     const { t, labelAccount, labelTransaction } = useAccountingLabels();
-    const children = getChildTransactions(parent.id, transactions);
+    const children = parent.children ?? [];
     if (!children.length) return null;
     const rows = children.map((child) => {
         let display: TransactionListPresentation;
@@ -110,12 +105,7 @@ export default function TransactionChildren({
                         </span>
                     </button>
                 )}
-                <TransactionChildren
-                    parent={child}
-                    transactions={transactions}
-                    context={context}
-                    nested
-                />
+                <TransactionChildren parent={child} context={context} nested />
             </div>
         );
     });

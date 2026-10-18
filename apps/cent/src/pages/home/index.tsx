@@ -106,7 +106,7 @@ export default function Page() {
                     accounts={data.accounts}
                     displayCurrency={mainCurrency}
                     showPeriodDates={false}
-                    groupChildren
+                    showChildren
                 />
             </div>
         </div>

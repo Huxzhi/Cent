@@ -107,10 +107,10 @@ export default defineConfig(({ mode }) => {
                 "@": resolve("./src"),
             },
         },
-        // chaty / zen 是 workspace 源码包（非预编译 dist），交给 Vite 直接当源码处理，
+        // chaty 是 workspace 源码包（非预编译 dist），交给 Vite 直接当源码处理，
         // 不要被 esbuild 预打包成外部依赖（否则其 `#/` 子路径导入与 Tailwind 扫描会失效）。
         optimizeDeps: {
-            exclude: ["@glink25/chaty", "@glink25/zen"],
+            exclude: ["@glink25/chaty"],
         },
         worker: {
             format: "es",

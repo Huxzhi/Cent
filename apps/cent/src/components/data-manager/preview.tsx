@@ -1,370 +1,241 @@
-import { getZenPostDayId } from "@glink25/zen";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import dayjs from "dayjs";
-import { useEffect, useMemo, useRef, useState } from "react";
-import { StorageAPI } from "@/api/storage";
-import type { Full } from "@/database/stash";
-import { useCreators } from "@/hooks/use-creator";
-import PopupLayout from "@/layouts/popup-layout";
-import type { Bill, GlobalMeta } from "@/ledger/type";
-import { useIntl } from "@/locale";
-import { useBookStore } from "@/store/book";
-import { useLedgerStore } from "@/store/ledger";
-import { useUserStore } from "@/store/user";
-import { base64ToFile } from "@/utils/file";
-import type { ZenPost } from "@/zen/types";
+import { useMemo, useRef, useState } from "react";
+import { useStore } from "zustand";
+import PopupLayout from "../../layouts/popup-layout";
+import { amountToDecimal } from "../../ledger/accounting";
+import {
+    billImportGroups,
+    canImportToAsset,
+    importBillsToAccounting,
+} from "../../ledger/accounting/import-bills";
+import type { GlobalMeta } from "../../ledger/type";
+import { useIntl } from "../../locale";
+import { accountingStore } from "../../store/accounting";
+import { useAccountingLabels } from "../accounting/i18n";
+import { Field, FormError, selectClass } from "../accounting/shared";
 import { Button } from "../ui/button";
-import { Label } from "../ui/label";
-import { RadioGroup, RadioGroupItem } from "../ui/radio-group";
-import { Switch } from "../ui/switch";
-import { buildMergedResolvers, PreviewBillItem } from "./preview-bill-item";
 
 export type PreviewState = {
-    bills: Full<Bill>[];
-    zenPosts?: Full<ZenPost>[];
-    meta?: GlobalMeta;
-    strategy?: "append" | "overlap";
-    asMine?: boolean;
+    bills: unknown[];
+    meta?: Partial<GlobalMeta>;
+    assetAccountId?: string;
+    assetAccountIds?: Record<string, string>;
+    bookId?: string;
+    revision?: number;
 };
-
-function normalizeZenPosts({
-    posts,
-    bookId,
-    userId,
-    asMine,
-}: {
-    posts: Full<ZenPost>[];
-    bookId: string;
-    userId: string;
-    asMine: boolean;
-}) {
-    const byId = new Map<string, Full<ZenPost>>();
-    for (const post of posts) {
-        const zenDayId = getZenPostDayId(post);
-        const id = asMine ? `zen-${zenDayId}-${userId}` : post.id;
-        const normalized = {
-            ...post,
-            id,
-            time: dayjs(zenDayId).startOf("day").valueOf(),
-            bookId,
-            userId: asMine ? userId : post.userId,
-        };
-        const previous = byId.get(id);
-        if (!previous || normalized.completedAt > previous.completedAt) {
-            byId.set(id, normalized);
-        }
-    }
-    return [...byId.values()];
-}
-
-export const PreviewForm = ({
+export function PreviewForm({
     edit,
     onCancel,
     onConfirm,
 }: {
     edit?: PreviewState;
     onCancel?: () => void;
-    onConfirm?: (v?: PreviewState) => void;
-}) => {
+    onConfirm?: (value: PreviewState) => void;
+}) {
     const t = useIntl();
-    const creators = useCreators();
-
-    const [transformed, setTransformed] = useState<PreviewState["bills"]>([]);
-    const [loading, setLoading] = useState(true);
-    const [asMine, setAsMine] = useState(edit?.asMine ?? true);
-    useEffect(() => {
-        const transform = async () => {
-            return await (edit?.bills
-                ? Promise.all(
-                      edit.bills.map(async (b) => {
-                          const images = b.images
-                              ? await Promise.all(
-                                    b.images?.map((img) => {
-                                        if (img instanceof File) {
-                                            return img;
-                                        }
-                                        if (img.startsWith("data:")) {
-                                            return base64ToFile(img);
-                                        }
-                                        return img;
-                                    }),
-                                )
-                              : undefined;
-                          return { ...b, images };
-                      }),
-                  )
-                : []);
-        };
-        transform()
-            .then((v) => {
-                setTransformed(v);
-            })
-            .catch(console.error)
-            .finally(() => {
-                setLoading(false);
-            });
-    }, [edit?.bills]);
-
-    const [importStrategy, setImportStrategy] = useState<"append" | "overlap">(
-        "append",
+    const { labelAccount } = useAccountingLabels();
+    const current = useStore(accountingStore, (state) => state.current);
+    const [assetId, setAssetId] = useState("");
+    const [assetIds, setAssetIds] = useState<Record<string, string>>({});
+    const groups = useMemo(
+        () => billImportGroups(edit?.bills ?? []),
+        [edit?.bills],
     );
-    const [availableAppend, setAvailableAppend] = useState<
-        PreviewState["bills"]
-    >([]);
-    const [normalizedZenPosts, setNormalizedZenPosts] = useState<
-        Full<ZenPost>[] | undefined
-    >(edit?.zenPosts === undefined ? undefined : []);
-    const [availableAppendZenPosts, setAvailableAppendZenPosts] = useState<
-        Full<ZenPost>[]
-    >([]);
-    const [zenLoading, setZenLoading] = useState(edit?.zenPosts !== undefined);
-
-    useEffect(() => {
-        const getAvailableAppend = async () => {
-            const imported = transformed;
-            const exist = await useLedgerStore.getState().refreshBillList();
-            const available = imported?.filter((b) => {
-                return exist.every((e) => e.id !== b.id && e.time !== b.time);
-            });
-            return available ?? [];
-        };
-        if (importStrategy === "append")
-            getAvailableAppend().then((v) => {
-                setAvailableAppend(v);
-            });
-    }, [transformed, importStrategy]);
-
-    useEffect(() => {
-        let cancelled = false;
-        const prepareZenPosts = async () => {
-            setZenLoading(edit?.zenPosts !== undefined);
-            if (edit?.zenPosts === undefined) {
-                setNormalizedZenPosts(undefined);
-                setAvailableAppendZenPosts([]);
-                return;
-            }
-            const bookId = useBookStore.getState().currentBookId;
-            if (!bookId) return;
-            const normalized = normalizeZenPosts({
-                posts: edit.zenPosts,
-                bookId,
-                userId: String(useUserStore.getState().id),
-                asMine,
-            });
-            if (cancelled) return;
-            setNormalizedZenPosts(normalized);
-            if (importStrategy === "append") {
-                const existing = await StorageAPI.getAllZenItems(bookId);
-                if (cancelled) return;
-                const existingIds = new Set(existing.map((post) => post.id));
-                setAvailableAppendZenPosts(
-                    normalized.filter((post) => !existingIds.has(post.id)),
-                );
-            } else {
-                setAvailableAppendZenPosts(normalized);
-            }
-        };
-        void prepareZenPosts().finally(() => {
-            if (!cancelled) setZenLoading(false);
-        });
-        return () => {
-            cancelled = true;
-        };
-    }, [asMine, edit?.zenPosts, importStrategy]);
-
-    const availableCount =
-        importStrategy === "append"
-            ? availableAppend.length
-            : (edit?.bills.length ?? 0);
-
-    // 跟随 toggle 决定展示的预览列表：append 仅展示去重后的可用条目，overlap 展示全部
-    const previewBills =
-        importStrategy === "append" ? availableAppend : transformed;
-
-    // 纯本地计算"假设合并后"的解析函数，绝不写入任何 store
-    const resolvers = useMemo(
-        () =>
-            buildMergedResolvers({
-                currentMeta: useLedgerStore.getState().infos?.meta,
-                incomingMeta: edit?.meta,
-                strategy: importStrategy,
-                asMine,
-                creators,
-                meLabel: t("me"),
-                unknownLabel: t("me"),
-                t,
-            }),
-        [edit?.meta, importStrategy, asMine, creators, t],
-    );
-
-    const listRef = useRef<HTMLDivElement>(null);
-    const rowVirtualizer = useVirtualizer({
-        count: previewBills.length,
-        getScrollElement: () => listRef.current,
-        estimateSize: () => 72,
-        overscan: 5,
+    const grouped = groups.some(Boolean);
+    const ready = grouped
+        ? groups.every((group) => !!assetIds[group])
+        : !!assetId;
+    const accounts = current?.data.accounts.filter(canImportToAsset) ?? [];
+    const preview = useMemo(() => {
+        if (!current || !edit || !ready) return {};
+        try {
+            if (
+                current.book.id !== edit.bookId ||
+                current.book.revision !== edit.revision
+            )
+                throw new Error(t("accounting-import-book-changed"));
+            return {
+                result: importBillsToAccounting(
+                    current.data,
+                    edit.bills,
+                    edit.meta,
+                    grouped ? assetIds : assetId,
+                    Date.now(),
+                ),
+            };
+        } catch (error) {
+            return {
+                error: error instanceof Error ? error.message : String(error),
+            };
+        }
+    }, [current, edit, assetId, assetIds, grouped, ready, t]);
+    const list = useRef<HTMLDivElement>(null);
+    const transactions = preview.result?.added ?? [];
+    const virtual = useVirtualizer({
+        count: transactions.length,
+        getScrollElement: () => list.current,
+        estimateSize: () => 70,
+        overscan: 4,
     });
-
     return (
         <PopupLayout
-            title={"导入预览"}
+            title={t("accounting-bill-import-preview")}
             onBack={onCancel}
-            className="h-full overflow-hidden rounded-md"
-            right={
+            className="h-full overflow-hidden"
+        >
+            <div className="flex-1 min-h-0 flex flex-col gap-3 p-4">
+                <div className="space-y-2 max-h-[35vh] overflow-y-auto shrink-0">
+                    {(grouped ? groups : [""]).map((group) => (
+                        <Field
+                            key={group}
+                            label={
+                                grouped
+                                    ? `${group || t("accounting-import-unspecified-method")} · ${t("accounting-import-asset-account")}`
+                                    : t("accounting-import-asset-account")
+                            }
+                        >
+                            <select
+                                className={selectClass}
+                                value={
+                                    grouped ? (assetIds[group] ?? "") : assetId
+                                }
+                                onChange={(event) =>
+                                    grouped
+                                        ? setAssetIds((values) => ({
+                                              ...values,
+                                              [group]: event.target.value,
+                                          }))
+                                        : setAssetId(event.target.value)
+                                }
+                            >
+                                <option value="">
+                                    {t("accounting-import-select-asset")}
+                                </option>
+                                {accounts.map((account) => (
+                                    <option key={account.id} value={account.id}>
+                                        {labelAccount(account)} (
+                                        {account.currency})
+                                    </option>
+                                ))}
+                            </select>
+                        </Field>
+                    ))}
+                </div>
+                <p className="text-xs text-muted-foreground">
+                    {t("accounting-import-double-entry-help")}
+                </p>
+                {!accounts.length && (
+                    <FormError error={t("accounting-import-no-asset")} />
+                )}
+                {preview.result && (
+                    <div className="text-sm space-y-1">
+                        <p>
+                            {t("accounting-import-bills-summary", {
+                                count: transactions.length,
+                                skipped: preview.result.skipped,
+                            })}
+                        </p>
+                        {grouped ? (
+                            Object.entries(preview.result.assetChanges).map(
+                                ([id, amount]) => (
+                                    <p key={id}>
+                                        {labelAccount(
+                                            accounts.find(
+                                                (account) => account.id === id,
+                                            )!,
+                                        )}
+                                        : {amountToDecimal(amount)}{" "}
+                                        {
+                                            accounts.find(
+                                                (account) => account.id === id,
+                                            )!.currency
+                                        }
+                                    </p>
+                                ),
+                            )
+                        ) : (
+                            <p>
+                                {t("accounting-import-asset-change", {
+                                    amount: amountToDecimal(
+                                        preview.result.assetChange,
+                                    ),
+                                })}
+                            </p>
+                        )}
+                    </div>
+                )}
+                <FormError error={preview.error} />
+                <div
+                    ref={list}
+                    className="flex-1 min-h-0 overflow-y-auto rounded-md border"
+                >
+                    <div
+                        style={{
+                            height: virtual.getTotalSize(),
+                            position: "relative",
+                        }}
+                    >
+                        {virtual.getVirtualItems().map((row) => {
+                            const transaction = transactions[row.index];
+                            const category = preview.result!.data.accounts.find(
+                                (account) =>
+                                    account.id ===
+                                    transaction.entries[0].accountId,
+                            )!;
+                            return (
+                                <div
+                                    key={transaction.id}
+                                    data-index={row.index}
+                                    ref={virtual.measureElement}
+                                    className="absolute left-0 top-0 w-full p-3 border-b text-sm"
+                                    style={{
+                                        transform:
+                                            "translateY(" + row.start + "px)",
+                                    }}
+                                >
+                                    <div className="flex justify-between gap-2">
+                                        <span>{labelAccount(category)}</span>
+                                        <span>
+                                            {amountToDecimal(
+                                                transaction.type === "income"
+                                                    ? -transaction.entries[0]
+                                                          .amount
+                                                    : transaction.entries[0]
+                                                          .amount,
+                                            )}{" "}
+                                            {transaction.currency}
+                                        </span>
+                                    </div>
+                                    <p className="text-xs text-muted-foreground truncate">
+                                        {new Date(
+                                            transaction.time,
+                                        ).toLocaleString()}{" "}
+                                        {transaction.description}
+                                    </p>
+                                </div>
+                            );
+                        })}
+                    </div>
+                </div>
                 <Button
-                    disabled={loading || zenLoading}
+                    disabled={
+                        !edit ||
+                        !ready ||
+                        !transactions.length ||
+                        !!preview.error
+                    }
                     onClick={() => {
-                        if (importStrategy === "append") {
+                        if (edit && preview.result)
                             onConfirm?.({
-                                bills: availableAppend,
-                                zenPosts:
-                                    normalizedZenPosts === undefined
-                                        ? undefined
-                                        : availableAppendZenPosts,
-                                meta: edit?.meta,
-                                strategy: "append",
-                                asMine,
+                                ...edit,
+                                assetAccountId: grouped ? undefined : assetId,
+                                assetAccountIds: grouped ? assetIds : undefined,
                             });
-                        } else {
-                            onConfirm?.({
-                                bills: edit?.bills ?? [],
-                                zenPosts: normalizedZenPosts,
-                                meta: edit?.meta,
-                                strategy: "overlap",
-                                asMine,
-                            });
-                        }
                     }}
                 >
                     {t("confirm")}
                 </Button>
-            }
-        >
-            <div className="relative flex-1 flex flex-col w-full gap-2 overflow-hidden">
-                <div className="flex flex-col px-4 gap-3">
-                    <div className="opacity-60 text-sm">
-                        {t("import-strategy")}:
-                        <span>{`${t("import-description")}`}</span>
-                    </div>
-                    <RadioGroup
-                        value={importStrategy}
-                        className="flex flex-col gap-2"
-                        onValueChange={(v) =>
-                            setImportStrategy(
-                                v === "append" ? "append" : "overlap",
-                            )
-                        }
-                    >
-                        <Label className="flex gap-2">
-                            <RadioGroupItem value="append" />
-                            {t("strategy-add")}
-                        </Label>
-                        <Label className="flex gap-2">
-                            <RadioGroupItem value="overlap" />
-                            {t("strategy-overlap")}
-                        </Label>
-                    </RadioGroup>
-                </div>
-                <div className="flex flex-col px-4 gap-3">
-                    <div>
-                        <div className="opacity-60 text-sm">
-                            {t("put-ledgers-on-me")}
-                        </div>
-                        <Switch checked={asMine} onCheckedChange={setAsMine} />
-                    </div>
-                    {!asMine && (
-                        <p className="text-xs text-red-700">
-                            {t("unkown-users-may-show-up-when-analyze")}
-                        </p>
-                    )}
-                </div>
-                <div className="flex-1 flex flex-col px-4 gap-3 overflow-hidden">
-                    <p className="opacity-60 text-sm">{t("preview")}:</p>
-
-                    {normalizedZenPosts !== undefined && (
-                        <p className="text-sm opacity-70">
-                            {t("zen-import-preview", {
-                                n:
-                                    importStrategy === "append"
-                                        ? availableAppendZenPosts.length
-                                        : normalizedZenPosts.length,
-                            })}
-                        </p>
-                    )}
-
-                    {importStrategy === "append" ? (
-                        <div>
-                            {t("append-preview-description", {
-                                n: (
-                                    <span className="text-green-700">
-                                        {availableCount}
-                                    </span>
-                                ),
-                            })}
-                        </div>
-                    ) : (
-                        <div>
-                            <div className="text-red-700">
-                                {t("overlap-preview-description", {
-                                    n: (
-                                        <span className="text-red-700">
-                                            {availableCount}
-                                        </span>
-                                    ),
-                                })}
-                            </div>
-                            {/* <div className="opacity-60 text-xs">
-                                {t("overlap-github-tip")}
-                            </div> */}
-                        </div>
-                    )}
-
-                    <div
-                        ref={listRef}
-                        className="flex-1 overflow-auto rounded-md border divide-y"
-                    >
-                        <div
-                            style={{
-                                height: `${rowVirtualizer.getTotalSize()}px`,
-                                width: "100%",
-                                position: "relative",
-                            }}
-                        >
-                            {rowVirtualizer
-                                .getVirtualItems()
-                                .map((virtualRow) => {
-                                    const bill = previewBills[virtualRow.index];
-                                    return (
-                                        <div
-                                            key={bill.id}
-                                            data-index={virtualRow.index}
-                                            ref={rowVirtualizer.measureElement}
-                                            style={{
-                                                position: "absolute",
-                                                top: `${virtualRow.start}px`,
-                                                left: 0,
-                                                width: "100%",
-                                            }}
-                                        >
-                                            <PreviewBillItem
-                                                bill={bill}
-                                                resolvers={resolvers}
-                                                showTime
-                                                showAssets
-                                                className="w-full"
-                                            />
-                                        </div>
-                                    );
-                                })}
-                        </div>
-                    </div>
-                </div>
-                {loading && (
-                    <div className="absolute top-0 left-0 w-full h-full bg-background/60 flex items-center justify-center">
-                        <i className="icon-[mdi--loading] animate-spin"></i>
-                    </div>
-                )}
             </div>
         </PopupLayout>
     );
-};
+}

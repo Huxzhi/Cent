@@ -6,6 +6,7 @@ import { createJSONStorage, persist } from "zustand/middleware";
 import { useShallow } from "zustand/shallow";
 import type { UserInfo } from "@/api/endpoints/type";
 import { loadStorageAPI } from "@/api/storage/dynamic";
+import { getSelectedSyncEndpoint } from "@/api/storage/selection";
 import { t } from "@/locale";
 
 const toastLib = import("sonner");
@@ -89,7 +90,9 @@ export const useUserStore = create<UserStore>()(
                 }
             };
 
-            void updateUserInfo().catch(() => {});
+            if (getSelectedSyncEndpoint()) {
+                void updateUserInfo().catch(() => {});
+            }
 
             const getUserInfo = async (login: string) => {
                 const run = async () => {

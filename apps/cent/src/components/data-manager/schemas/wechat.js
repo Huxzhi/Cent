@@ -1,180 +1,230 @@
-// 这是一个用于将微信导出的账单XLSX文件转换为标准的交易结构数据ExportedJSON的脚本
-/**
- * @typedef {Object} ExportedJSON
- * @property {Array} items
- * @property {Object} meta
- */
-
-/**
- * @typedef {Object} File
- * @property {string} name - 文件名。
- * @property {number} size - 文件大小（字节）。
- * // 实际的 File 结构应根据您实际使用的 File 对象来定义，通常是浏览器中的 File 或 Node.js 中的文件对象
- */
-
-/**
- * @typedef {Object} Context
- * @property {object} Papa - 专门用于解析CSV文件的第三方JS库。
- * @property {Function} Papa.parse - 用于解析CSV数据的方法。
- * @property {object} XLSX - 专门用于解析Excel文件的第三方JS库。
- * @property {Function} XLSX.read - 用于读取Excel文件的方法。
- * @property {Array} DefaultCategories - 默认的账单分类信息，如果解析结果没有增加分类，则meta.categories应该设置为DefaultCategories，否则，应该返回DefaultCategories加上新增的分类
- */
-
-/**
- * 转换文件并解析其内容为特定格式的JSON。
- *
- * @param {File} file - 需要转换的文件对象。
- * @param {Context} ctx - 包含第三方解析库的上下文对象。
- * @returns {Promise<ExportedJSON>} 转换后得到的JSON对象。
- */
-
+// 智能导入脚本：微信官方 XLSX / XLS / CSV / TSV 账单。
+// paymentMethod 用于预览时按支付方式选择资产账户；金额单位为 1/10000 元。
 async function transform(file, ctx) {
-    const csvHead = [
-        "交易时间", // 0
-        "交易类型", // 1
-        "交易对方", // 2
-        "商品", // 3
-        "收/支", // 4
-        "金额(元)", // 5
-        "支付方式", // 6
-        "当前状态", // 7
-        "交易单号", // 8
-        "商户单号", // 9
-        "备注", // 10
-    ];
-
-    const cMap = {
-        餐饮: "food",
-        饭: "food",
-        外卖: "food",
-        肯德基: "food",
-        KFC: "food",
-        茶: "food",
-        滴滴: "taxi",
-        公交: "bus",
-        地铁: "subway",
-        打车: "taxi",
-        话费: "phone",
-        电费: "electricity",
-        水费: "water",
-        房租: "rent",
-        物业: "mgmt-fee",
-        购物: "shopping",
-        淘宝: "shopping",
-        京东: "shopping",
-        拼多多: "shopping",
-        超市: "household",
-        服饰: "clothing",
-        鞋: "clothing",
-        电影: "movies",
-        旅游: "travel",
-        酒: "drinks",
-        娱乐: "entertainment",
-        医疗: "clinic",
-        药房: "pharmacy",
-        学费: "tuition",
-        书: "books",
-        课程: "courses",
-        红包: "hongbao",
-        转账: "relationship",
-        亲属: "family",
-        礼物: "gifts",
-        理财通: "balance-account",
-        提现: "balance-account",
-        充值: "balance-account-income",
-        工资: "wage",
-        退款: "refund",
-        收款: "other-income",
-        服务费: "fees-charges",
-        手续费: "fees-charges",
-        优剪: "household", // 归类为家庭服务
-    };
-
-    /**
-     * 将带有货币符号和逗号的字符串转换为浮点数。
-     * 它会移除所有非数字字符（除了小数点）。
-     *
-     * @param {string} currencyString - 要转换的字符串，例如 "¥324.00" 或 "$1,234.56"。
-     * @returns {number} 转换后的浮点数。
-     */
-    function convertCurrencyToNumber(currencyString) {
-        if (typeof currencyString !== "string") {
-            // 处理非字符串输入，例如 null 或 undefined
-            return NaN;
+    const clean = (value) =>
+        String(value ?? "")
+            .replace(/^\uFEFF/, "")
+            .trim();
+    const meaningful = (value) => !["", "/", "-", "--"].includes(clean(value));
+    const buffer = await file.arrayBuffer();
+    let rows;
+    if (/\.(csv|tsv|txt)$/i.test(file.name)) {
+        let text;
+        try {
+            text = new TextDecoder("utf-8", { fatal: true }).decode(buffer);
+        } catch {
+            text = new TextDecoder("gb18030", { fatal: true }).decode(buffer);
         }
-
-        // 1. 使用正则表达式移除所有非数字字符和非小数点字符。
-        //    - `/[^0-9.]/g` 匹配所有不是数字 (0-9) 和不是小数点 (.) 的字符。
-        //    - '' (空字符串) 替换这些匹配到的字符。
-        const numberString = currencyString.replace(/[^0-9.]/g, "");
-
-        // 2. 使用 parseFloat() 将清理后的字符串转换为浮点数。
-        return parseFloat(numberString);
-    }
-
-    const getCategory = (name) => {
-        const target = Array.from(Object.entries(cMap)).find(([key]) => {
-            if (name.includes(key)) {
-                return true;
-            }
-            return false;
+        const lines = text.replace(/^\uFEFF/, "").split(/\r?\n/);
+        const start = lines.findIndex(
+            (line) =>
+                line.includes("交易时间") &&
+                line.includes("交易单号") &&
+                line.includes("收/支"),
+        );
+        if (start < 0)
+            throw new Error(
+                "未找到微信账单表头（交易时间、收/支、交易单号）。",
+            );
+        const delimiter = lines[start].includes("\t") ? "\t" : ",";
+        const parsed = ctx.Papa.parse(lines.slice(start).join("\n"), {
+            delimiter,
+            dynamicTyping: false,
+            skipEmptyLines: "greedy",
         });
-        return target?.[1];
-    };
-
-    const numberToAmount = (v) => Number((v * 10000).toFixed(0));
-    const fileBuffer = await new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = (e) => {
-            const data = e.target.result;
-            resolve(data);
-        };
-        reader.onerror = reject;
-        reader.readAsArrayBuffer(file);
-    });
-    const workbook = await ctx.XLSX.read(fileBuffer, {
-        type: "array",
-    });
-    const sheetName = workbook.SheetNames[0];
-    const worksheet = workbook.Sheets[sheetName];
-    const dataArray = XLSX.utils.sheet_to_json(worksheet, {
-        header: 1, // 设置 header: 1 会返回一个二维数组，包含所有行
-    });
-
-    const bills = [];
-    dataArray.slice(17).forEach((item) => {
-        const billType =
-            item[4] === "收入"
-                ? "income"
-                : item[4] === "支出"
-                  ? "expense"
-                  : undefined;
-        if (billType === undefined) {
-            // 忽略不计支出
-            return;
+        if (parsed.errors.length)
+            throw new Error(`CSV 格式错误：${parsed.errors[0].message}`);
+        rows = parsed.data;
+    } else {
+        const workbook = ctx.XLSX.read(buffer, {
+            type: "array",
+            cellDates: false,
+        });
+        // 某些工作簿第一张是说明页，遍历寻找真正的明细表。
+        for (const name of workbook.SheetNames) {
+            const candidate = ctx.XLSX.utils.sheet_to_json(
+                workbook.Sheets[name],
+                {
+                    header: 1,
+                    raw: true,
+                    defval: "",
+                    blankrows: false,
+                },
+            );
+            if (
+                candidate.some(
+                    (row) =>
+                        row.map(clean).includes("交易时间") &&
+                        row.map(clean).includes("交易单号"),
+                )
+            ) {
+                rows = candidate;
+                break;
+            }
         }
-        const time = new Date(item[0]).getTime();
-        const categoryId =
-            getCategory(item[2]) ??
-            (billType === "income" ? "other-income" : "other-expenses");
-        const comment = [1, 2, 3].map((i) => `${item[i]}`).join(" ");
-        const amount = numberToAmount(convertCurrencyToNumber(item[5]));
-        const bill = {
-            id: `${item[8]}-wechat`,
-            type: billType,
-            time,
-            categoryId,
-            comment: `${comment} wechat`,
-            amount,
-            creatorId: "from-wechat",
-        };
-        bills.push(bill);
+    }
+    if (!rows) throw new Error("未找到微信账单明细工作表。");
+    const headerIndex = rows.findIndex((row) => {
+        const names = row.map(clean);
+        return (
+            names.includes("交易时间") &&
+            names.includes("交易单号") &&
+            names.includes("收/支")
+        );
     });
+    if (headerIndex < 0) throw new Error("未找到微信账单表头。");
+    const header = rows[headerIndex].map((value) =>
+        clean(value).replace(/（/g, "(").replace(/）/g, ")"),
+    );
+    const column = (name, required = false) => {
+        const index = header.indexOf(name);
+        if (required && index < 0) throw new Error(`缺少列：${name}`);
+        return index;
+    };
+    const columns = Object.fromEntries(
+        [
+            "交易时间",
+            "交易类型",
+            "交易对方",
+            "商品",
+            "收/支",
+            "金额(元)",
+            "支付方式",
+            "当前状态",
+            "交易单号",
+            "商户单号",
+            "备注",
+        ].map((name) => [
+            name,
+            column(
+                name,
+                ["交易时间", "收/支", "金额(元)", "交易单号"].includes(name),
+            ),
+        ]),
+    );
+    const amountOf = (value) => {
+        const text = clean(value).replace(/^[¥￥]\s*/, "");
+        if (!/^(?:\d+|\d{1,3}(?:,\d{3})+)(?:\.\d{1,4})?$/.test(text))
+            throw new Error(`无效金额：${text}`);
+        const [whole, fraction = ""] = text.replace(/,/g, "").split(".");
+        const amount = BigInt(whole) * 10000n + BigInt(fraction.padEnd(4, "0"));
+        if (amount > BigInt(Number.MAX_SAFE_INTEGER))
+            throw new Error("金额超出安全范围。");
+        return Number(amount);
+    };
+    const timeOf = (value) => {
+        let parts;
+        if (typeof value === "number") {
+            const date = ctx.XLSX.SSF.parse_date_code(value);
+            if (date)
+                parts = [
+                    date.y,
+                    date.m,
+                    date.d,
+                    date.H,
+                    date.M,
+                    Math.floor(date.S),
+                ];
+        } else {
+            const match = clean(value).match(
+                /^(\d{4})[-/](\d{1,2})[-/](\d{1,2})\s+(\d{1,2}):(\d{2}):(\d{2})$/,
+            );
+            if (match) parts = match.slice(1).map(Number);
+        }
+        if (!parts) throw new Error(`无效交易时间：${clean(value)}`);
+        const [year, month, day, hour, minute, second] = parts;
+        const utc = Date.UTC(year, month - 1, day, hour, minute, second);
+        const date = new Date(utc);
+        if (
+            date.getUTCFullYear() !== year ||
+            date.getUTCMonth() !== month - 1 ||
+            date.getUTCDate() !== day ||
+            hour > 23 ||
+            minute > 59 ||
+            second > 59
+        )
+            throw new Error("交易时间超出有效范围。");
+        // 微信账单明确使用 UTC+08:00，避免依赖浏览器所在时区。
+        return utc - 8 * 60 * 60 * 1000;
+    };
+    const expenseCategory = (merchant) => {
+        if (/吉野家|咖啡|cafe|居酒屋|餐厅|食堂|饭店/i.test(merchant))
+            return "food";
+        if (/拼多多|淘宝|京东|天猫/.test(merchant)) return "shopping";
+        return "other-expenses";
+    };
+    const items = [];
+    for (let index = headerIndex + 1; index < rows.length; index++) {
+        const row = rows[index];
+        const get = (name) => clean(row[columns[name]]);
+        const direction = get("收/支"),
+            status = get("当前状态");
+        if (!["收入", "支出"].includes(direction)) continue; // 中性交易需要两个已知账户，不自动推断。
+        if (
+            /支付失败|交易关闭|已关闭|已取消|未支付|待支付|待收款|已退还|已撤销/.test(
+                status,
+            )
+        )
+            continue;
+        try {
+            const rawId = row[columns["交易单号"]];
+            if (typeof rawId === "number" && !Number.isSafeInteger(rawId))
+                throw new Error(
+                    "交易单号已丢失精度，请使用官方原始文件，勿将单号列转成数字。",
+                );
+            const transactionId = get("交易单号").replace(/^'+/, "");
+            if (!/^\d+$/.test(transactionId))
+                throw new Error("缺少有效交易单号。");
+            const amount = amountOf(row[columns["金额(元)"]]);
+            if (amount === 0) continue;
+            const transactionType = get("交易类型"),
+                merchant = get("交易对方");
+            // 收入方向的退款冲减费用。已退款的原支出仍保留，与退款行互相抵消。
+            const refund =
+                direction === "收入" && /退款/.test(transactionType + status);
+            const type = direction === "支出" || refund ? "expense" : "income";
+            let paymentMethod = get("支付方式");
+            if (!meaningful(paymentMethod))
+                paymentMethod = /已存入零钱/.test(status)
+                    ? "零钱"
+                    : "未注明支付方式";
+            items.push({
+                id: `${transactionId}-wechat`,
+                type,
+                amount: refund ? -amount : amount,
+                time: timeOf(row[columns["交易时间"]]),
+                categoryId:
+                    type === "expense"
+                        ? expenseCategory(merchant)
+                        : "other-income",
+                creatorId: "from-wechat",
+                paymentMethod,
+                comment: [
+                    "微信",
+                    ...[
+                        "交易类型",
+                        "交易对方",
+                        "商品",
+                        "支付方式",
+                        "当前状态",
+                        "商户单号",
+                        "备注",
+                    ]
+                        .filter((name) => meaningful(get(name)))
+                        .map((name) => `${name}：${get(name)}`),
+                ].join("；"),
+            });
+        } catch (error) {
+            throw new Error(`微信账单第 ${index + 1} 行：${error.message}`);
+        }
+    }
+    if (!items.length) throw new Error("账单中没有可导入的已完成收支记录。");
     return {
-        items: bills,
+        items,
         meta: {
             categories: ctx.DefaultCategories,
+            tags: [],
+            baseCurrency: "CNY",
         },
     };
 }

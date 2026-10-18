@@ -1,16 +1,18 @@
 import { toast } from "sonner";
+import { ImportPreviewProvider } from "../data-manager/preview-form";
+import { GitHubAuthProvider, showGitHubAuth } from "./github";
 import { LoadingProvider, loading } from "./loading";
 import { PromptProvider, prompt } from "./prompt";
-import { S3AuthProvider, showS3Auth } from "./s3";
 import { showWebDAVAuth, WebDAVAuthProvider } from "./web-dav";
 
 export function ModalProvider() {
     return (
         <>
             <PromptProvider />
+            <ImportPreviewProvider />
             <LoadingProvider />
             <WebDAVAuthProvider />
-            <S3AuthProvider />
+            <GitHubAuthProvider />
         </>
     );
 }
@@ -19,7 +21,7 @@ const modal = {
     loading,
     prompt,
     webDavAuth: showWebDAVAuth,
-    s3Auth: showS3Auth,
+    githubAuth: showGitHubAuth,
     toast,
 };
 

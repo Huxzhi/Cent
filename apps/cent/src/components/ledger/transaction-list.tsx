@@ -6,7 +6,6 @@ import { useTag } from "../../hooks/use-tag";
 import {
     type Account,
     getAccountIcon,
-    getChildTransactions,
     type Transaction,
 } from "../../ledger/accounting";
 import { replayCurrencyCosts } from "../../ledger/accounting/currency-cost";
@@ -36,11 +35,11 @@ export default function TransactionList({
     accounts,
     displayCurrency,
     showPeriodDates = true,
-    groupChildren = false,
+    showChildren = false,
 }: {
     displayCurrency?: string;
     showPeriodDates?: boolean;
-    groupChildren?: boolean;
+    showChildren?: boolean;
     transactions: Transaction[];
     accounts: Account[];
 }) {
@@ -74,15 +73,9 @@ export default function TransactionList({
             return Number.isFinite(rate) && rate > 0 ? rate : undefined;
         },
     };
-    const visibleIds = new Set(
-        transactions.map((transaction) => transaction.id),
-    );
     const ordered = transactions
         .filter(
-            (transaction) =>
-                !groupChildren ||
-                !transaction.parentTransactionId ||
-                !visibleIds.has(transaction.parentTransactionId),
+            (transaction) => !showChildren || !transaction.parentTransactionId,
         )
         .sort(
             (left, right) =>
@@ -126,9 +119,6 @@ export default function TransactionList({
                         );
                     }
                     const date = bookDayjs(transaction.time);
-                    const children = groupChildren
-                        ? getChildTransactions(transaction.id, transactions)
-                        : [];
                     const label = formatListLabel(
                         display,
                         t,
@@ -201,10 +191,9 @@ export default function TransactionList({
                                 showTime
                                 onClick={openTransaction}
                             />
-                            {!!children.length && (
+                            {showChildren && !!transaction.children?.length && (
                                 <TransactionChildren
                                     parent={transaction}
-                                    transactions={transactions}
                                     context={context}
                                 />
                             )}

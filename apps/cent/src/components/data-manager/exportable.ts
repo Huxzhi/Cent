@@ -1,13 +1,8 @@
-import { strFromU8, strToU8, unzip, zip } from "fflate";
-import { StorageAPI } from "@/api/storage";
-import type { Bill, ExportedJSON } from "@/ledger/type";
-import { cacheInDB } from "@/utils/cache";
-import { GetOnlineAssetsCacheKey } from "@/utils/constant";
-import { base64ToFile } from "@/utils/file";
+import { strFromU8, unzip } from "fflate";
+import type { ExportedJSON } from "../../ledger/type";
 
 const BACKUP_JSON_FILE = "backup.json";
 const ASSET_PREFIX = "assets/";
-
 const MIME_BY_EXTENSION: Record<string, string> = {
     gif: "image/gif",
     jpeg: "image/jpeg",
@@ -28,38 +23,6 @@ const unzipAsync = (data: Uint8Array) => {
             resolve(files);
         });
     });
-};
-
-const zipAsync = (data: Record<string, Uint8Array>, signal?: AbortSignal) => {
-    return new Promise<Uint8Array>((resolve, reject) => {
-        const terminate = zip(data, { level: 6 }, (error, zipped) => {
-            if (signal) {
-                signal.removeEventListener("abort", onAbort);
-            }
-            if (error) {
-                reject(error);
-                return;
-            }
-            resolve(zipped);
-        });
-        const onAbort = () => {
-            terminate();
-            reject(signal?.reason ?? new DOMException("Aborted", "AbortError"));
-        };
-        if (signal) {
-            if (signal.aborted) {
-                onAbort();
-                return;
-            }
-            signal.addEventListener("abort", onAbort);
-        }
-    });
-};
-
-const throwIfAborted = (signal?: AbortSignal) => {
-    if (signal?.aborted) {
-        throw signal.reason ?? new DOMException("Aborted", "AbortError");
-    }
 };
 
 const getFileExtension = (fileName: string, fallbackType?: string) => {
@@ -83,24 +46,8 @@ const getMimeType = (fileName: string, fallbackType?: string) => {
     );
 };
 
-const getAssetFileName = (
-    billId: string,
-    imageIndex: number,
-    sourceName?: string,
-    sourceType?: string,
-) => {
-    const safeBillId = billId.replaceAll(/[^a-zA-Z0-9_-]/g, "-");
-    const extension = getFileExtension(sourceName ?? "", sourceType);
-    return `${ASSET_PREFIX}${safeBillId}-${imageIndex}.${extension}`;
-};
-
 const getImportedFileName = (assetPath: string) => {
     return assetPath.split("/").pop() || "asset";
-};
-
-const getUrlFileName = (value: string) => {
-    const path = value.split(/[?#]/)[0] ?? value;
-    return path.split("/").pop() || "asset";
 };
 
 const normalizeZipAssetPath = (value: string) => {
@@ -152,66 +99,10 @@ const mapImportImages = async (
     );
 };
 
-const fileToUint8Array = async (file: Blob) => {
-    return new Uint8Array(await file.arrayBuffer());
-};
-
-const resolveImageFile = async (image: string | File, bookId: string) => {
-    if (image instanceof File) {
-        return image;
-    }
-    if (image.startsWith("data:")) {
-        return await base64ToFile(image);
-    }
-
-    const getOnlineAsset = StorageAPI.getOnlineAsset
-        ? cacheInDB(StorageAPI.getOnlineAsset, GetOnlineAssetsCacheKey)
-        : undefined;
-    const blob = await getOnlineAsset?.(image, bookId);
-    if (!blob) {
-        throw new Error(`Unable to load asset for export: ${image}`);
-    }
-    return new File([blob], getUrlFileName(image), {
-        type: getMimeType(getUrlFileName(image), blob.type),
-    });
-};
-
-const mapExportImages = async (
-    items: ExportedJSON["items"],
-    bookId: string,
-) => {
-    const files: Record<string, Uint8Array> = {};
-    const mappedItems = await Promise.all(
-        items.map(async (item) => {
-            if (!item.images?.length) {
-                return item;
-            }
-            const images = await Promise.all(
-                item.images.map(async (image, imageIndex) => {
-                    const file = await resolveImageFile(image, bookId);
-                    const assetPath = getAssetFileName(
-                        item.id,
-                        imageIndex,
-                        file.name,
-                        file.type,
-                    );
-                    files[assetPath] = await fileToUint8Array(file);
-                    return assetPath;
-                }),
-            );
-            return {
-                ...item,
-                images,
-            } satisfies Bill;
-        }),
-    );
-    return { items: mappedItems, files };
-};
-
 export const processImportFile = async (backupFile: File) => {
     const isZip =
         backupFile.type === "application/zip" ||
-        backupFile.name.endsWith(".zip");
+        /\.zip$/i.test(backupFile.name);
     if (!isZip) {
         const jsonText = await backupFile.text();
         return JSON.parse(jsonText) as ExportedJSON;
@@ -228,38 +119,4 @@ export const processImportFile = async (backupFile: File) => {
         ...data,
         items: await mapImportImages(data.items, files),
     };
-};
-
-export const prepareExportFile = async (
-    bookId: string,
-    signal?: AbortSignal,
-) => {
-    throwIfAborted(signal);
-    const [items, meta, zenPosts] = await Promise.all([
-        StorageAPI.getAllItems(bookId),
-        StorageAPI.getMeta(bookId),
-        StorageAPI.getAllZenItems(bookId),
-    ]);
-    throwIfAborted(signal);
-    const { items: exportedItems, files } = await mapExportImages(
-        items,
-        bookId,
-    );
-    throwIfAborted(signal);
-    const json = JSON.stringify({
-        items: exportedItems,
-        meta,
-        zenPosts,
-    } as ExportedJSON);
-
-    const zipped = await zipAsync(
-        {
-            [BACKUP_JSON_FILE]: strToU8(json),
-            ...files,
-        },
-        signal,
-    );
-    const blob = new Blob([zipped as any], { type: "application/zip" });
-
-    return { blob, ext: "cent.zip" };
 };

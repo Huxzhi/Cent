@@ -4,7 +4,6 @@
 /// <reference types="vite-plugin-svgr/client" />
 
 interface Window {
-    __CENT_ZEN_FALLBACK__?: boolean;
     __CENT_MEASUREMENT__?: import("./measurement").CentMeasurementCollector;
 }
 

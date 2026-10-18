@@ -19,10 +19,11 @@ import { BillCategories } from "@/ledger/category";
 import type { Bill } from "@/ledger/type";
 import { useIntl } from "@/locale";
 import { measure } from "@/measurement";
-import { useLedgerStore } from "@/store/ledger";
 import createConfirmProvider from "../confirm";
+import { isCancelError } from "../confirm/state";
 import Loading from "../loading";
 import { Button } from "../ui/button";
+import { importFromPreviewResult, showImportPreview } from "./preview-form";
 
 // 单条用户行
 export interface UserRow {
@@ -133,13 +134,14 @@ function OncentImportForm({
         }
         setLoading(true);
         try {
-            await useLedgerStore
-                .getState()
-                .batchImportFromBills(
-                    selected.data?.map((v) => transferToBill(v as BillRow)) ??
-                        [],
-                    importStrategy === "overlap",
-                );
+            const preview = await showImportPreview({
+                bills:
+                    selected.data?.map((v) => ({
+                        ...transferToBill(v as BillRow),
+                        creatorId: selected.user.id,
+                    })) ?? [],
+            });
+            await importFromPreviewResult(preview);
             const itemCount = selected.data?.length ?? 0;
             if (itemCount > 0) {
                 measure("bill_created", {
@@ -151,8 +153,11 @@ function OncentImportForm({
             onConfirm?.(true);
             setLoading(false);
         } catch (error) {
+            if (isCancelError(error)) return;
             toast.error(`${t("import-failed")}: ${error}`);
             onConfirm?.(false);
+        } finally {
+            setLoading(false);
         }
     };
     return (

@@ -2,68 +2,76 @@ import { useEffect } from "react";
 import { useStore } from "zustand";
 import { loadStorageAPI } from "../api/storage/dynamic";
 import { accountingStore } from "../store/accounting";
+import { accountingBooks } from "../sync/accounting";
 
-/** 已由用户关联的账本保存后同步；未关联的本地账本保持离线可用。 */
+/** 页面响应 SDK 账本事件；聚焦或联网时同步。 */
 export function useAccountingSync() {
     const current = useStore(accountingStore, (state) => state.current);
     const id = current?.book.id;
-    const revision = current?.book.revision;
     const remoteId = current?.remoteId;
-    const pending = current?.pendingSync;
+    const provider = current?.remoteProvider ?? "webdav";
     useEffect(() => {
-        if (!id || revision === undefined || !remoteId || !pending) return;
-        void loadStorageAPI()
-            .then(({ StorageAPI }) => {
-                if (!StorageAPI.accounting) return;
-                const sync = StorageAPI.accounting;
-                return accountingStore
-                    .getState()
-                    .synchronize((book) =>
-                        book.book.id === id
-                            ? sync.syncBook(id)
-                            : Promise.resolve(book),
-                    );
-            })
-            .catch(() => {});
-    }, [id, revision, remoteId, pending]);
+        if (!id) return;
+        let disposed = false;
+        let requested = false;
+        let reloading = false;
+        const reload = async () => {
+            requested = true;
+            if (reloading) return;
+            reloading = true;
+            try {
+                // Imports can commit many revisions while a refresh is queued.
+                // Read again if another commit arrives during the current read.
+                while (requested && !disposed) {
+                    requested = false;
+                    await accountingStore
+                        .getState()
+                        .reload()
+                        .catch(() => {});
+                }
+            } finally {
+                reloading = false;
+            }
+        };
+        const unsubscribe = accountingBooks.onChange(({ bookId }) => {
+            if (bookId === accountingStore.getState().current?.book.id)
+                void reload();
+        });
+        const onFocus = () => void reload();
+        window.addEventListener("focus", onFocus);
+        return () => {
+            disposed = true;
+            unsubscribe();
+            window.removeEventListener("focus", onFocus);
+        };
+    }, [id]);
     useEffect(() => {
         if (!id || !remoteId) return;
         let disposed = false;
-        let unsubscribe: (() => void) | undefined;
         const pull = () => {
             if (disposed) return;
             void loadStorageAPI()
                 .then(({ StorageAPI }) => {
-                    const sync = StorageAPI.accounting;
-                    if (!sync || disposed) return;
+                    const sync = StorageAPI.books;
+                    if (!sync || disposed || StorageAPI.type !== provider)
+                        return;
                     return accountingStore
                         .getState()
                         .synchronize((book) =>
                             book.book.id === id
-                                ? sync.syncBook(id)
+                                ? sync.sync(id)
                                 : Promise.resolve(book),
                         );
                 })
                 .catch(() => {});
         };
-        void loadStorageAPI().then(({ StorageAPI }) => {
-            if (disposed) return;
-            unsubscribe = StorageAPI.accounting?.onChange(({ bookId }) => {
-                if (bookId === accountingStore.getState().current?.book.id)
-                    void accountingStore
-                        .getState()
-                        .reload()
-                        .catch(() => {});
-            });
-        });
         window.addEventListener("online", pull);
         window.addEventListener("focus", pull);
         pull();
         return () => {
             disposed = true;
-            unsubscribe?.();
             window.removeEventListener("online", pull);
             window.removeEventListener("focus", pull);
         };
-    }, [id, remoteId]);
+    }, [id, remoteId, provider]);
 }

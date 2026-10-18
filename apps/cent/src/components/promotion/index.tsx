@@ -27,16 +27,6 @@ const WhatsNew: (PromotionItem & { action?: () => void })[] = [
         },
     },
     {
-        id: "zen-mode-released",
-        label: "zen-mode-released",
-        action: () => {
-            window.open(
-                "https://glink25.github.io/post/%E7%A6%85%E6%A8%A1%E5%BC%8F%E6%9D%A5%E4%BA%86/",
-                "_blank",
-            );
-        },
-    },
-    {
         id: "cent-ios-released",
         label: "cent-ios-released",
         action: () => {

@@ -143,7 +143,7 @@ const returnSchema = z.object({
         .optional()
         .describe("成功导入的账单数量（ok=true 时存在）。"),
     strategy: z
-        .enum(["append", "overlap"])
+        .enum(["append"])
         .optional()
         .describe("用户选择的导入策略（ok=true 时存在）。"),
     reason: z
@@ -201,7 +201,7 @@ export const ImportBillsTool = createTool({
         return {
             ok: true,
             imported: arg.items.length,
-            strategy: res.strategy,
+            strategy: "append" as const,
         };
     },
 });

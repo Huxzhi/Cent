@@ -57,7 +57,8 @@ pnpm run check
 
 * 📂 src/api  
 * 📂 src/database
-* 📂 src/tidal
+* 📂 src/sync
+* 📂 packages/sync-sdk
 
 **修改规则：**
 

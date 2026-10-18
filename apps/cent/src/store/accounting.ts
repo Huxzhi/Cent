@@ -1,9 +1,7 @@
 import { createStore } from "zustand/vanilla";
-import {
-    type AccountingBook,
-    type AccountingRepository,
-    accountingRepository,
-    type LoadedAccountingBook,
+import type {
+    AccountingBook,
+    LoadedAccountingBook,
 } from "../database/accounting";
 import {
     type AccountingData,
@@ -14,7 +12,15 @@ import {
     enableAccountCurrencies,
 } from "../ledger/accounting/currency-settings";
 import { organizeCurrencyTradingAccounts } from "../ledger/accounting/currency-trading";
+import {
+    type AccountingBooks,
+    AccountingProjectionError,
+    AccountingSyncConflictError,
+    accountingBooks,
+} from "../sync/accounting";
 import { createDefaultAccountingData } from "./default-accounting-data";
+
+export const ACTIVE_BOOK_KEY = "cent-accounting-active-book";
 
 const withAccountCurrencies = (data: AccountingData): AccountingData => {
     const previous = data.currencySettings ?? defaultCurrencySettings;
@@ -42,7 +48,14 @@ export interface AccountingStore {
     ready: boolean;
     busy: boolean;
     error?: string;
-    initialize(preferredBookId?: string): Promise<void>;
+    conflict?: AccountingSyncConflictError;
+    initialize(
+        preferredBookId?: string,
+        options?: {
+            createDefault?: boolean;
+            selectFirst?: boolean;
+        },
+    ): Promise<void>;
     selectBook(id: string): Promise<void>;
     addBook(
         id: string,
@@ -64,8 +77,13 @@ export interface AccountingStore {
     ): Promise<void>;
 }
 
-/** 可注入 repository 测试；串行执行操作，写入成功后才更新可见状态。 */
-export function createAccountingStore(repository: AccountingRepository) {
+/** 只通过账本适配层读写；串行执行操作，写入成功后才更新可见状态。 */
+export function createAccountingStore(
+    booksService: Pick<
+        AccountingBooks,
+        "listBooks" | "openBook" | "createBook" | "saveBook"
+    >,
+) {
     let queue: Promise<void> = Promise.resolve();
     let initialization: Promise<void> | undefined;
     return createStore<AccountingStore>()((set, get) => {
@@ -75,6 +93,18 @@ export function createAccountingStore(repository: AccountingRepository) {
                 try {
                     await operation();
                 } catch (error) {
+                    if (error instanceof AccountingProjectionError)
+                        set({
+                            current: undefined,
+                            ready: false,
+                            conflict: undefined,
+                        });
+                    if (error instanceof AccountingSyncConflictError)
+                        set({
+                            current: undefined,
+                            ready: true,
+                            conflict: error,
+                        });
                     set({
                         error:
                             error instanceof Error
@@ -91,6 +121,7 @@ export function createAccountingStore(repository: AccountingRepository) {
         };
         const apply = (current: LoadedAccountingBook) =>
             set({
+                conflict: undefined,
                 current: {
                     ...current,
                     data: withTradingHierarchy(
@@ -108,17 +139,20 @@ export function createAccountingStore(repository: AccountingRepository) {
             books: [],
             ready: false,
             busy: false,
-            initialize(preferredBookId) {
+            initialize(preferredBookId, options = {}) {
                 if (get().ready) return Promise.resolve();
                 if (initialization) return initialization;
                 initialization = run(async () => {
-                    const books = await repository.listBooks();
+                    const books = await booksService.listBooks();
                     set({ books });
-                    if (books.length === 0) {
+                    const selected =
+                        books.find((book) => book.id === preferredBookId) ??
+                        (options.selectFirst === false ? undefined : books[0]);
+                    if (books.length === 0 && options.createDefault !== false) {
                         try {
                             const now = Date.now();
                             apply(
-                                await repository.createBook(
+                                await booksService.createBook(
                                     "main",
                                     "我的账本",
                                     now,
@@ -131,16 +165,10 @@ export function createAccountingStore(repository: AccountingRepository) {
                                 error.name !== "ConstraintError"
                             )
                                 throw error;
-                            apply(await repository.loadBook("main"));
+                            apply(await booksService.openBook("main"));
                         }
-                    } else
-                        apply(
-                            await repository.loadBook(
-                                books.find(
-                                    (book) => book.id === preferredBookId,
-                                )?.id ?? books[0].id,
-                            ),
-                        );
+                    } else if (selected)
+                        apply(await booksService.openBook(selected.id));
                     set({ ready: true });
                 }).finally(() => {
                     initialization = undefined;
@@ -149,12 +177,12 @@ export function createAccountingStore(repository: AccountingRepository) {
             },
             selectBook: (id) =>
                 run(async () => {
-                    apply(await repository.loadBook(id));
+                    apply(await booksService.openBook(id));
                 }),
             addBook: (id, name, now, data) =>
                 run(async () => {
                     apply(
-                        await repository.createBook(
+                        await booksService.createBook(
                             id,
                             name,
                             now,
@@ -167,15 +195,15 @@ export function createAccountingStore(repository: AccountingRepository) {
             reload: () =>
                 run(async () => {
                     const id = get().current?.book.id;
-                    set({ books: await repository.listBooks() });
-                    if (id) apply(await repository.loadBook(id));
+                    set({ books: await booksService.listBooks() });
+                    if (id) apply(await booksService.openBook(id));
                 }),
             synchronize: (operation) =>
                 run(async () => {
                     const current = get().current;
                     if (!current) throw new Error("请先选择账本。");
                     const result = await operation(current);
-                    set({ books: await repository.listBooks() });
+                    set({ books: await booksService.listBooks() });
                     apply(result);
                 }),
             updateData: (transform, now) => {
@@ -200,7 +228,7 @@ export function createAccountingStore(repository: AccountingRepository) {
                         ),
                     };
                     apply(
-                        await repository.saveBook(
+                        await booksService.saveBook(
                             current.book.id,
                             current.book.revision,
                             recalculated,
@@ -213,4 +241,4 @@ export function createAccountingStore(repository: AccountingRepository) {
     });
 }
 
-export const accountingStore = createAccountingStore(accountingRepository);
+export const accountingStore = createAccountingStore(accountingBooks);

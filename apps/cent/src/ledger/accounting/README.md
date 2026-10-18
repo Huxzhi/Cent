@@ -58,9 +58,15 @@ statistics.ts 保留收支汇总和完整余额查询；完整余额与成本重
 
 ## 备份、持久化和同步
 
+数据管理中的单式账单导入、智能导入与 Oncent 导入统一先进入复式预览。用户必须选择未归档、允许收付款的资产账户；importBillsToAccounting 按原分类的模板标识和币种复用或创建费用／收入账户，支出借记费用、贷记所选资产，收入借记资产、贷记收入，负数按相反方向处理。只追加新的账单 ID，同一发生时间的不同 ID 均保留；已有 ID 跳过，不覆盖交易。预览不写库，确认时检查账本 ID 与 revision，再通过一次 updateData 提交整批账户、交易和标签。币种不匹配或任一条目无效时整批拒绝。
+
+微信智能导入使用 `components/data-manager/schemas/wechat.js` 的独立 `transform(file, ctx)` 脚本，支持官方 XLSX／XLS／CSV／TSV 文件，解析库通过 transform.worker.ts 随应用打包，运行时不访问 CDN；自动查找明细表头，按 UTC+8 读取时间并保留长交易单号。脚本为每条记录附加 `paymentMethod`，预览为每种支付方式分别选择资产账户；未注明方式的记录单独选择，明确“已存入零钱”的收入归到零钱。各组分配后一次原子提交，writerSeq 只增加一次；普通未分组导入仍只选择一个资产账户。收入方向的退款生成负数费用，原已退款支出保留；中性交易和未完成交易不自动导入，分类只做保守匹配，商户单号等保留在备注。
+
+旧 JSON／ZIP 的本地图片转换为交易内联图片，远程图片链接不会被静默丢弃。导出使用完整复式 JSON，包含账户、分录、图片和元数据；导入完整复式备份仍按独立账本恢复，保留原有平衡分录，不再按所选资产重复生成收支。
+
 exportAccountingJson(accounts, transactions, tagMetadata?, mapConfig?, currencySettings?, statisticsViews?, timeZone?) 导出完整根交易与元数据。importAccountingJson 只接受 format: cent-accounting、schemaVersion: 17、amountScale: 10000；旧开发版本、未知字段和无效数据整份拒绝，不自动迁移。validateAccountingData 校验账户、原币平衡、树、区间、成本历史及元数据。交易不导出派生 currency、exchange、展示金额或规则副本。
 
 
 每账本独立 IndexedDB 库 cent-accounting-book/v6/<编码账本 ID>，沿用 __items、__meta、__config、__stashes。根交易、账户、版本与增量原子提交，失败回滚；多个标签页使用 revision 拒绝覆盖。store 串行提交完整候选，写入成功才更新可见状态。
 
-GitHub 复用原传输层，使用独立仓库前缀 cent2-booking-，所有交易日志仍按 ledger-<offset>.json 分块，账户定义保存在 meta.json。通过 database/stash.ts 的快照三方合并及增量重放同步，分录按整体冲突判断，子交易按 ID 合并。上传使用 commit SHA 比较并禁止 force，确认后重建未发送日志，保留上传期间的新本地修改。同步传输格式为 cent-accounting-sync / 版本1，与备份17不同。WebDAV、Gitee、S3 的复式适配尚未提供。详见 docs/accounting-storage.md。
+账本通过 src/sync/accounting.ts 调用独立 packages/sync-sdk，api/endpoints/shared.ts 只负责端点和调度。当前支持 WebDAV、GitHub 与离线模式。同步使用 Writer 独立序号、因果上下文、Put-Wins、不可变批次和条件提交 Head；并发金额保留完整版本，解决冲突前不进入统计。根交易递归包含 children，业务校验复用本目录，详见 docs/sync-sdk-implementation.md。

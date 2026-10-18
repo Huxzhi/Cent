@@ -1,0 +1,24 @@
+{
+	"name": "@glink25/sync-sdk",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"exports": {
+		".": "./src/index.ts"
+	},
+	"scripts": {
+		"test": "vitest run",
+		"typecheck": "tsc --noEmit",
+		"lint": "tsc --noEmit && biome check --diagnostic-level error src tests"
+	},
+	"dependencies": {
+		"idb": "^8.0.3",
+		"fflate": "^0.8.2"
+	},
+	"devDependencies": {
+		"vitest": "^4.1.9",
+		"fake-indexeddb": "^6.2.5",
+		"typescript": "~5.8.3",
+		"@biomejs/biome": "2.2.2"
+	}
+}

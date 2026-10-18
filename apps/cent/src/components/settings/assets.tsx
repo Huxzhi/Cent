@@ -16,8 +16,8 @@ export function AssetsSettings() {
         usePreference("showAssetsInLedger");
 
     const refreshCacheSize = useCallback(async () => {
-        // 1. 获取tidal内部的文件缓存
-        const getTidalAssetsSize = async () => {
+        // 1. 获取本地账单附件大小
+        const getLocalAssetsSize = async () => {
             const allBills = await useLedgerStore.getState().refreshBillList();
             const size = allBills.reduce(
                 (prev, bill) =>
@@ -36,7 +36,7 @@ export function AssetsSettings() {
             return info.total;
         };
 
-        const res = await Promise.all([getTidalAssetsSize(), getCacheSize()]);
+        const res = await Promise.all([getLocalAssetsSize(), getCacheSize()]);
         const size = res.reduce((p, c) => p + c, 0);
         setCachedSize(size);
     }, []);
@@ -55,8 +55,8 @@ export function AssetsSettings() {
             return;
         }
         setClearing(true);
-        // 1. 清理tidal本地的哈希缓存，触发再次同步
-        const clearTidalHash = async () => {
+        // 1. 请求同步以刷新远端状态
+        const requestSync = async () => {
             const book = useBookStore.getState().currentBookId;
             if (!book) {
                 return;
@@ -69,7 +69,7 @@ export function AssetsSettings() {
             return clearCached(GetOnlineAssetsCacheKey);
         };
         try {
-            await Promise.all([clearTidalHash(), clearCacheInDB()]);
+            await Promise.all([requestSync(), clearCacheInDB()]);
             await refreshCacheSize();
         } finally {
             setClearing(false);

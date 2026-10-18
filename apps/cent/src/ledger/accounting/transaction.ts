@@ -1,3 +1,4 @@
+import { isEqual } from "lodash-es";
 import type { Transaction } from "./types";
 
 type TransactionNode<T> = {
@@ -70,9 +71,7 @@ export function synchronizeTransactionChildren(
             .sort((a, b) => a.time - b.time || a.id.localeCompare(b.id))
             .map((child) => build(child, depth + 1));
         const { children: _oldChildren, ...own } = transaction;
-        const changed =
-            JSON.stringify(transaction.children ?? []) !==
-            JSON.stringify(children);
+        const changed = !isEqual(transaction.children ?? [], children);
         const result = {
             ...own,
             ...(children.length ? { children } : {}),

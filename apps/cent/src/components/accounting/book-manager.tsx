@@ -1,3 +1,4 @@
+import { createId } from "@glink25/sync-sdk";
 import { useState } from "react";
 import { useStore } from "zustand";
 import PopupLayout from "../../layouts/popup-layout";
@@ -6,8 +7,8 @@ import { accountingStore } from "../../store/accounting";
 import createConfirmProvider from "../confirm";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
+import AccountingBookSync from "./book-sync";
 import DataManager from "./data-manager";
-import AccountingGitHubSync from "./github-sync";
 import { useAccountingLabels } from "./i18n";
 import { Field, FormError, selectClass, useFormAction } from "./shared";
 
@@ -87,7 +88,7 @@ function BookManager({
                                     await accountingStore
                                         .getState()
                                         .addBook(
-                                            crypto.randomUUID(),
+                                            createId(),
                                             name.trim(),
                                             Date.now(),
                                         );
@@ -114,7 +115,7 @@ function BookManager({
                         <p className="text-xs text-muted-foreground">
                             {t("accounting-template-book-help")}
                         </p>
-                        <AccountingGitHubSync />
+                        <AccountingBookSync />
                     </>
                 )}
                 {edit === "data" && (

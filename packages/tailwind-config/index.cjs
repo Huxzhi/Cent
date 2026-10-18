@@ -1,7 +1,7 @@
 const plugin = require("tailwindcss/plugin");
 
 /**
- * 共享 Tailwind preset：cent / chaty / zen 三个包统一的 darkMode、keyframes、
+ * 共享 Tailwind preset：cent / chaty / toast 三个包统一的 darkMode、keyframes、
  * animations 与 scrollbar-hidden 工具类的单一来源，避免各包重复定义、彼此漂移。
  *
  * 注意：`@iconify/tailwind4`、`tailwindcss-animate`、`tw-animate-css` 等通过各包

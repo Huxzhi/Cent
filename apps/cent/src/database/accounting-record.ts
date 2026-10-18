@@ -151,6 +151,17 @@ export function fromAccountingRecords(
     meta: AccountingMeta,
     items: AccountingItem[],
 ): AccountingData {
+    const data = fromFlatAccountingRecords(meta, items);
+    return {
+        ...data,
+        transactions: flattenTransactionTree(data.transactions),
+    };
+}
+/** Independent records retain parent references; the domain validator derives children for views. */
+export function fromFlatAccountingRecords(
+    meta: AccountingMeta,
+    items: AccountingItem[],
+): AccountingData {
     if ("depreciationRules" in meta)
         throw new Error("Unsupported account-bound depreciation metadata");
     return {
@@ -162,8 +173,8 @@ export function fromAccountingRecords(
         ...(meta.currencySettings === undefined
             ? {}
             : { currencySettings: meta.currencySettings }),
-        transactions: flattenTransactionTree(
-            items.map((item) => fromAccountingItem(item, meta.accounts)),
+        transactions: items.map((item) =>
+            fromAccountingItem(item, meta.accounts),
         ),
         ...(meta.tags === undefined
             ? {}

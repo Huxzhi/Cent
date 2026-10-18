@@ -41,15 +41,17 @@ const billSchema = z
     })
     .passthrough();
 
-export const canImportToAsset = (account: Account) =>
-    account.type === "asset" &&
+export const canImportToPaymentAccount = (account: Account) =>
+    (account.type === "asset" || account.type === "liability") &&
     !account.archived &&
     !account.paymentDisabled &&
     account.subtype !== "subscription";
 
-export type ImportAssetSelection = string | Readonly<Record<string, string>>;
+export type ImportPaymentAccountSelection =
+    | string
+    | Readonly<Record<string, string>>;
 
-/** Optional script field: each distinct payment method needs an explicit asset mapping. */
+/** Optional script field: each distinct payment method needs an explicit payment-account mapping. */
 export function billImportGroups(input: readonly unknown[]) {
     return [
         ...new Set(
@@ -67,25 +69,30 @@ export function importBillsToAccounting(
     current: AccountingData,
     input: readonly unknown[],
     meta: Partial<GlobalMeta> | undefined,
-    assetId: ImportAssetSelection,
+    accountSelection: ImportPaymentAccountSelection,
     now: number,
 ) {
     const bills = z.array(billSchema).parse(input);
-    if (typeof assetId === "string" && billImportGroups(bills).length > 1)
-        throw new Error("不同支付方式请分别选择资产账户。");
-    const assetFor = (paymentMethod: string = "") => {
+    if (
+        typeof accountSelection === "string" &&
+        billImportGroups(bills).length > 1
+    )
+        throw new Error("不同支付方式请分别选择收付款账户（资产或负债）。");
+    const paymentAccountFor = (paymentMethod: string = "") => {
         const selected =
-            typeof assetId === "string" ? assetId : assetId[paymentMethod];
-        const asset = current.accounts.find(
+            typeof accountSelection === "string"
+                ? accountSelection
+                : accountSelection[paymentMethod];
+        const paymentAccount = current.accounts.find(
             (account) => account.id === selected,
         );
-        if (!asset || !canImportToAsset(asset))
+        if (!paymentAccount || !canImportToPaymentAccount(paymentAccount))
             throw new Error(
-                `请选择有效的资产账户${paymentMethod ? `：${paymentMethod}` : ""}。`,
+                `请选择有效的收付款账户（资产或负债）${paymentMethod ? `：${paymentMethod}` : ""}。`,
             );
-        return asset;
+        return paymentAccount;
     };
-    for (const group of billImportGroups(bills)) assetFor(group);
+    for (const group of billImportGroups(bills)) paymentAccountFor(group);
     const ids = new Set(
         current.transactions.map((transaction) => transaction.id),
     );
@@ -182,11 +189,11 @@ export function importBillsToAccounting(
     };
     const added: Transaction[] = [];
     for (const bill of incoming.values()) {
-        const asset = assetFor(bill.paymentMethod);
+        const paymentAccount = paymentAccountFor(bill.paymentMethod);
         const currency = bill.currency?.target ?? meta?.baseCurrency ?? "CNY";
-        if (currency !== asset.currency)
+        if (currency !== paymentAccount.currency)
             throw new Error(
-                `账单 ${bill.id} 的币种为 ${currency}，请选择相同币种的资产账户。`,
+                `账单 ${bill.id} 的币种为 ${currency}，请选择相同币种的收付款账户（资产或负债）。`,
             );
         const amount = bill.currency?.amount ?? bill.amount;
         if (Math.sign(amount) !== Math.sign(bill.amount))
@@ -194,7 +201,7 @@ export function importBillsToAccounting(
         const category = categoryAccount(
             bill.categoryId,
             bill.type,
-            asset.currency,
+            paymentAccount.currency,
         );
         const expense = bill.type === "expense";
         const createdAt = bill.__create_at ?? bill.time;
@@ -212,7 +219,10 @@ export function importBillsToAccounting(
             tagIds: bill.tagIds?.map(tagId),
             entries: [
                 { accountId: category.id, amount: expense ? amount : -amount },
-                { accountId: asset.id, amount: expense ? -amount : amount },
+                {
+                    accountId: paymentAccount.id,
+                    amount: expense ? -amount : amount,
+                },
             ],
         });
     }
@@ -221,8 +231,7 @@ export function importBillsToAccounting(
             data: current,
             added,
             skipped,
-            assetChange: 0,
-            assetChanges: {} as Record<string, number>,
+            accountChanges: {} as Record<string, number>,
         };
     const transactions = recalculateCurrencyTransactions(
         [...current.transactions, ...added],
@@ -236,16 +245,13 @@ export function importBillsToAccounting(
         transactions,
         ...(tagMetadata.tags.length ? { tagMetadata } : {}),
     });
-    const assetChanges: Record<string, number> = {};
+    const accountChanges: Record<string, number> = {};
     for (const transaction of added) {
         const entry = transaction.entries[1];
-        assetChanges[entry.accountId] = sumAmounts([
-            assetChanges[entry.accountId] ?? 0,
+        accountChanges[entry.accountId] = sumAmounts([
+            accountChanges[entry.accountId] ?? 0,
             entry.amount,
         ]);
     }
-    const assetChange = sumAmounts(
-        added.map((transaction) => transaction.entries[1].amount),
-    );
-    return { data, added, skipped, assetChange, assetChanges };
+    return { data, added, skipped, accountChanges };
 }

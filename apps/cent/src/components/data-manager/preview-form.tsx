@@ -27,8 +27,8 @@ export async function showImportPreview(input: PreviewState) {
 }
 
 export async function importFromPreviewResult(result: PreviewState) {
-    if (!result.assetAccountId && !result.assetAccountIds)
-        throw new Error("请先选择资产账户。");
+    if (!result.paymentAccountId && !result.paymentAccountIds)
+        throw new Error("请先选择收付款账户（资产或负债）。");
     const state = accountingStore.getState();
     if (!result.bookId || state.current?.book.id !== result.bookId)
         throw new Error("账本已切换，请重新预览导入。");
@@ -44,7 +44,7 @@ export async function importFromPreviewResult(result: PreviewState) {
             data,
             result.bills,
             result.meta,
-            result.assetAccountIds ?? result.assetAccountId!,
+            result.paymentAccountIds ?? result.paymentAccountId!,
             Date.now(),
         ).data;
     }, Date.now());

@@ -5,7 +5,7 @@ import PopupLayout from "../../layouts/popup-layout";
 import { amountToDecimal } from "../../ledger/accounting";
 import {
     billImportGroups,
-    canImportToAsset,
+    canImportToPaymentAccount,
     importBillsToAccounting,
 } from "../../ledger/accounting/import-bills";
 import type { GlobalMeta } from "../../ledger/type";
@@ -18,8 +18,8 @@ import { Button } from "../ui/button";
 export type PreviewState = {
     bills: unknown[];
     meta?: Partial<GlobalMeta>;
-    assetAccountId?: string;
-    assetAccountIds?: Record<string, string>;
+    paymentAccountId?: string;
+    paymentAccountIds?: Record<string, string>;
     bookId?: string;
     revision?: number;
 };
@@ -33,19 +33,20 @@ export function PreviewForm({
     onConfirm?: (value: PreviewState) => void;
 }) {
     const t = useIntl();
-    const { labelAccount } = useAccountingLabels();
+    const { labelAccount, accountTypes } = useAccountingLabels();
     const current = useStore(accountingStore, (state) => state.current);
-    const [assetId, setAssetId] = useState("");
-    const [assetIds, setAssetIds] = useState<Record<string, string>>({});
+    const [accountId, setAccountId] = useState("");
+    const [accountIds, setAccountIds] = useState<Record<string, string>>({});
     const groups = useMemo(
         () => billImportGroups(edit?.bills ?? []),
         [edit?.bills],
     );
     const grouped = groups.some(Boolean);
     const ready = grouped
-        ? groups.every((group) => !!assetIds[group])
-        : !!assetId;
-    const accounts = current?.data.accounts.filter(canImportToAsset) ?? [];
+        ? groups.every((group) => !!accountIds[group])
+        : !!accountId;
+    const accounts =
+        current?.data.accounts.filter(canImportToPaymentAccount) ?? [];
     const preview = useMemo(() => {
         if (!current || !edit || !ready) return {};
         try {
@@ -59,7 +60,7 @@ export function PreviewForm({
                     current.data,
                     edit.bills,
                     edit.meta,
-                    grouped ? assetIds : assetId,
+                    grouped ? accountIds : accountId,
                     Date.now(),
                 ),
             };
@@ -68,7 +69,7 @@ export function PreviewForm({
                 error: error instanceof Error ? error.message : String(error),
             };
         }
-    }, [current, edit, assetId, assetIds, grouped, ready, t]);
+    }, [current, edit, accountId, accountIds, grouped, ready, t]);
     const list = useRef<HTMLDivElement>(null);
     const transactions = preview.result?.added ?? [];
     const virtual = useVirtualizer({
@@ -90,30 +91,33 @@ export function PreviewForm({
                             key={group}
                             label={
                                 grouped
-                                    ? `${group || t("accounting-import-unspecified-method")} · ${t("accounting-import-asset-account")}`
-                                    : t("accounting-import-asset-account")
+                                    ? `${group || t("accounting-import-unspecified-method")} · ${t("accounting-import-payment-account")}`
+                                    : t("accounting-import-payment-account")
                             }
                         >
                             <select
                                 className={selectClass}
                                 value={
-                                    grouped ? (assetIds[group] ?? "") : assetId
+                                    grouped
+                                        ? (accountIds[group] ?? "")
+                                        : accountId
                                 }
                                 onChange={(event) =>
                                     grouped
-                                        ? setAssetIds((values) => ({
+                                        ? setAccountIds((values) => ({
                                               ...values,
                                               [group]: event.target.value,
                                           }))
-                                        : setAssetId(event.target.value)
+                                        : setAccountId(event.target.value)
                                 }
                             >
                                 <option value="">
-                                    {t("accounting-import-select-asset")}
+                                    {t("accounting-import-select-account")}
                                 </option>
                                 {accounts.map((account) => (
                                     <option key={account.id} value={account.id}>
-                                        {labelAccount(account)} (
+                                        {labelAccount(account)} ·{" "}
+                                        {accountTypes[account.type]} (
                                         {account.currency})
                                     </option>
                                 ))}
@@ -125,7 +129,7 @@ export function PreviewForm({
                     {t("accounting-import-double-entry-help")}
                 </p>
                 {!accounts.length && (
-                    <FormError error={t("accounting-import-no-asset")} />
+                    <FormError error={t("accounting-import-no-account")} />
                 )}
                 {preview.result && (
                     <div className="text-sm space-y-1">
@@ -135,32 +139,28 @@ export function PreviewForm({
                                 skipped: preview.result.skipped,
                             })}
                         </p>
-                        {grouped ? (
-                            Object.entries(preview.result.assetChanges).map(
-                                ([id, amount]) => (
+                        {Object.entries(preview.result.accountChanges).map(
+                            ([id, amount]) => {
+                                const account = accounts.find(
+                                    (item) => item.id === id,
+                                )!;
+                                const change =
+                                    account.type === "liability"
+                                        ? -amount
+                                        : amount;
+                                return (
                                     <p key={id}>
-                                        {labelAccount(
-                                            accounts.find(
-                                                (account) => account.id === id,
-                                            )!,
-                                        )}
-                                        : {amountToDecimal(amount)}{" "}
-                                        {
-                                            accounts.find(
-                                                (account) => account.id === id,
-                                            )!.currency
-                                        }
+                                        {t("accounting-import-account-change", {
+                                            name: labelAccount(account),
+                                            type: accountTypes[account.type],
+                                            amount:
+                                                (change > 0 ? "+" : "") +
+                                                amountToDecimal(change),
+                                            currency: account.currency,
+                                        })}
                                     </p>
-                                ),
-                            )
-                        ) : (
-                            <p>
-                                {t("accounting-import-asset-change", {
-                                    amount: amountToDecimal(
-                                        preview.result.assetChange,
-                                    ),
-                                })}
-                            </p>
+                                );
+                            },
                         )}
                     </div>
                 )}
@@ -228,8 +228,12 @@ export function PreviewForm({
                         if (edit && preview.result)
                             onConfirm?.({
                                 ...edit,
-                                assetAccountId: grouped ? undefined : assetId,
-                                assetAccountIds: grouped ? assetIds : undefined,
+                                paymentAccountId: grouped
+                                    ? undefined
+                                    : accountId,
+                                paymentAccountIds: grouped
+                                    ? accountIds
+                                    : undefined,
                             });
                     }}
                 >

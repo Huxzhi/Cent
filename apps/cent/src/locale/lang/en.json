@@ -1255,11 +1255,11 @@
   "accounting-change-sync-config": "Change sync configuration",
   "accounting-bill-import-preview": "Import preview",
   "accounting-import-unspecified-method": "Unspecified payment method",
-  "accounting-import-asset-account": "Payment / deposit asset account",
-  "accounting-import-select-asset": "Choose an asset account",
-  "accounting-import-double-entry-help": "Import into the current book: expenses increase expense accounts and reduce the selected asset; income increases the asset and income accounts. Existing transaction IDs are skipped. Full accounting backups retain their entries and restore as separate books.",
-  "accounting-import-no-asset": "No asset accounts are available. Create one in Accounts first.",
+  "accounting-import-payment-account": "Payment account (asset or liability)",
+  "accounting-import-select-account": "Choose a payment account",
+  "accounting-import-double-entry-help": "Expenses increase costs and reduce the selected asset or increase its liability. Income and refunds reverse the corresponding entries. Map each payment method to an account. Composite payments use the statement amount without guessing funding or discount splits. Existing bill IDs are skipped. Full accounting backups restore as separate books.",
+  "accounting-import-no-account": "No eligible payment accounts. Create an asset or liability account first.",
   "accounting-import-bills-summary": "Import {count} transactions; skip {skipped} duplicates.",
-  "accounting-import-asset-change": "Net change in the selected asset: {amount}",
+  "accounting-import-account-change": "{name} ({type}) net change: {amount} {currency}",
   "accounting-import-book-changed": "The book has changed. Open a new import preview."
 }

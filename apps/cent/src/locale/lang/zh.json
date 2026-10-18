@@ -1266,11 +1266,11 @@
   "accounting-change-sync-config": "更改同步配置",
   "accounting-bill-import-preview": "导入预览",
   "accounting-import-unspecified-method": "未注明支付方式",
-  "accounting-import-asset-account": "收付款资产账户",
-  "accounting-import-select-asset": "请选择资产账户",
-  "accounting-import-double-entry-help": "导入到当前账本：支出增加对应费用、减少所选资产；收入增加所选资产和对应收入。按账单 ID 跳过重复记录，不覆盖已有交易。完整复式备份保留原有分录，恢复为独立账本。",
-  "accounting-import-no-asset": "没有可用的资产账户，请先到账户管理中创建。",
+  "accounting-import-payment-account": "收付款账户（资产或负债）",
+  "accounting-import-select-account": "请选择收付款账户",
+  "accounting-import-double-entry-help": "支出增加费用，并减少所选资产或增加所选负债；收入与退款按相反分录处理。每种付款方式分别选择账户；组合付款按明细金额记入所选账户，不自动拆分优惠或资金来源。按账单 ID 跳过重复记录。完整复式备份恢复为独立账本。",
+  "accounting-import-no-account": "没有可用的收付款账户，请先到账户管理中创建资产或负债账户。",
   "accounting-import-bills-summary": "将导入 {count} 条，跳过 {skipped} 条重复记录。",
-  "accounting-import-asset-change": "所选资产账户净变动：{amount}",
+  "accounting-import-account-change": "{name}（{type}）净变动：{amount} {currency}",
   "accounting-import-book-changed": "账本已变化，请重新打开导入预览。"
 }

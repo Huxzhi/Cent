@@ -143,7 +143,7 @@ export default function Page() {
                     displayCurrency={mainCurrency}
                     showPeriodDates={false}
                     showChildren
-                    direction="asc"
+                    direction="desc"
                     contextData={data}
                     preparing={!current}
                     hasMore={!!pages.page?.cursor && !pages.error}

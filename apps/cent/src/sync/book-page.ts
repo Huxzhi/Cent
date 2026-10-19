@@ -39,7 +39,7 @@ export async function readLedgerPage(
         const page = await sdk.store.query<AccountingItem>({
             collection: "ledger",
             orderBy: "time",
-            direction: "asc",
+            direction: "desc",
             limit: BOOK_PAGE_SIZE,
             cursor: next,
         });

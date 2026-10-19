@@ -98,10 +98,13 @@ export default function TransactionList({
                 )
                 .sort(
                     (left, right) =>
-                        (direction === "asc"
-                            ? left.time - right.time
-                            : right.time - left.time) ||
-                        (left.id < right.id ? -1 : left.id > right.id ? 1 : 0),
+                        (direction === "asc" ? 1 : -1) *
+                        (left.time - right.time ||
+                            (left.id < right.id
+                                ? -1
+                                : left.id > right.id
+                                  ? 1
+                                  : 0)),
                 ),
         [transactions, showChildren, direction],
     );

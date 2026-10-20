@@ -131,7 +131,7 @@ export default function TransactionList({
             ref={scroll}
             data-virtual-ledger
             data-loaded-count={ordered.length}
-            className="relative h-full overflow-y-auto bill-list scrollbar-hidden pb-20"
+            className="relative h-full min-h-0 overflow-y-auto overscroll-y-none touch-pan-y bill-list scrollbar-hidden"
         >
             <div
                 data-main-ledger

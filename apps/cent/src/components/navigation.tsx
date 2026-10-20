@@ -25,8 +25,8 @@ export default function Navigation({
 
     return createPortal(
         <div
-            className="floating-tab fixed w-screen h-18 flex items-center justify-around sm:h-screen
-         sm:w-18 sm:flex-col sm:justify-start z-[0] 
+            className="floating-tab fixed left-[var(--safe-area-inset-left)] right-[var(--safe-area-inset-right)] h-[var(--mobile-navigation-height)] flex items-center justify-around sm:h-auto
+         sm:w-18 sm:right-auto sm:flex-col sm:justify-start z-[0]
          bottom-[calc(.25rem+var(--safe-area-inset-bottom))]
          sm:top-[var(--safe-area-top)] sm:left-[calc(.25rem+var(--safe-area-inset-left))]"
         >

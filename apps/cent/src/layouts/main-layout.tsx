@@ -82,7 +82,7 @@ function AccountingLayout({ selected }: { selected: SyncEndpoint }) {
             ) : current || preview ? (
                 <>
                     <Navigation disabled={!current} />
-                    <div className="w-full h-full sm:pl-18">
+                    <div className="w-full h-full min-h-0 overflow-hidden pb-[calc(var(--mobile-navigation-height)+.5rem)] sm:pb-0 sm:pl-18">
                         <Outlet />
                     </div>
                 </>
